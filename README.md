@@ -100,10 +100,20 @@ Exemplo de telemetria:
 
 ## 4. O dispositivo simulado (mock)
 
-Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](dispositivos/simulador/) faz o papel do hardware: cada máquina simulada se comporta como um microcontrolador (ex.: ESP32) com sensores, publicando o JSON acima no broker. Ele é um projeto à parte, com imagem Docker e dependências próprias (só `paho-mqtt` e `numpy`), e **não importa nada da plataforma**.
+Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](dispositivos/simulador/) faz o papel do hardware. Ele é um projeto à parte, com imagem Docker e dependências próprias (só `paho-mqtt` e `numpy`), e **não importa nada da plataforma**.
+
+**Um container por máquina.** Cada máquina roda no seu próprio container, como um microcontrolador (ex.: ESP32) instalado em cada equipamento. A imagem é a mesma (o "firmware"), mas cada uma tem identidade própria (`MAQUINA_ID`), sua própria conexão MQTT e assina só os comandos endereçados a ela. Assim, uma máquina pode cair sem afetar as outras:
+
+| Container | Máquina | Tipo de produto | Comportamento |
+|---|---|---|---|
+| `maquina-m01` | M-01 | M | saudável |
+| `maquina-m02` | M-02 | L | saudável |
+| `maquina-m03` | M-03 | L | **degrada até falhar** |
+| `maquina-m04` | M-04 | H | saudável |
+| `maquina-m05` | M-05 | M | saudável |
 
 - **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina antes de o desgaste ficar perigoso.
-- **Máquina degradando** (`M-03` por padrão): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
+- **Máquina degradando** (`DEGRADANDO=true`, a M-03): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
 - Quando falha, a máquina **para** (não envia telemetria), publica o evento `falha` e, depois de um tempo, volta com manutenção corretiva. Se o painel mandar uma ordem de manutenção **antes**, ela é feita preventivamente e a falha é evitada.
 
 A física da máquina ([`maquina.py`](dispositivos/simulador/maquina.py)) segue o processo documentado do AI4I 2020, para que a telemetria simulada seja realista. Ela fica **só do lado do dispositivo**: a IA nunca vê essas regras. Ela aprende os padrões com os dados históricos e recebe apenas a telemetria, como numa fábrica de verdade.
@@ -156,7 +166,7 @@ cd IOT-Predictive-Maintenance
 docker compose up --build
 ```
 
-Abra **http://localhost:8501**. O compose sobe, nesta ordem: broker → treino do modelo (roda uma vez e termina) → inferência → simulador → painel.
+Abra **http://localhost:8501**. O compose sobe, nesta ordem: broker → treino do modelo (roda uma vez e termina) → inferência → máquinas (um container cada) → painel.
 
 Para parar: `Ctrl+C` e `docker compose down` (use `docker compose down -v` para apagar também o histórico do banco).
 
@@ -185,8 +195,19 @@ Depois, cada um num terminal (sempre a partir da raiz do repositório):
 ```bash
 python -m plataforma.inferencia.servico        # terminal 1: plataforma
 streamlit run plataforma/painel/app.py         # terminal 2: plataforma -> http://localhost:8501
-python dispositivos/simulador/simulador.py     # terminal 3: chão de fábrica
 ```
+
+E as máquinas, uma por processo. No PowerShell, este comando abre uma janela para cada uma:
+
+```powershell
+$maquinas = @(@("M-01","M","false"), @("M-02","L","false"), @("M-03","L","true"), @("M-04","H","false"), @("M-05","M","false"))
+foreach ($m in $maquinas) {
+  $env:MAQUINA_ID = $m[0]; $env:TIPO_PRODUTO = $m[1]; $env:DEGRADANDO = $m[2]
+  Start-Process python -ArgumentList "dispositivos/simulador/simulador.py"
+}
+```
+
+(Linux/macOS: `MAQUINA_ID=M-03 TIPO_PRODUTO=L DEGRADANDO=true python dispositivos/simulador/simulador.py &`, e assim por diante.)
 
 ### Roteiro da demonstração (vídeo)
 
@@ -195,6 +216,7 @@ python dispositivos/simulador/simulador.py     # terminal 3: chão de fábrica
 3. O risco da IA sobe, a máquina vai para 🟡 atenção e depois 🔴 **ALERTA**, com a causa "Sobrecarga (desgaste x torque)".
 4. **Caminho A:** não fazer nada. A máquina falha (⛔ PARADA) e a tabela de validação mostra que **a IA avisou X segundos antes**.
 5. **Caminho B:** clicar em **🔧 Manutenção**. O comando vai via MQTT até a máquina, ela é reparada e a falha é **evitada** (contador "falhas evitadas").
+6. **Resiliência:** num terminal, `docker compose stop maquina-m02`. Só a M-02 vai para ⚪ **Sem sinal**, e as demais seguem normalmente. Com `docker compose start maquina-m02`, ela volta.
 
 ## 7. Dataset
 
@@ -209,13 +231,14 @@ Se o arquivo não existir, o treino usa um **dataset sintético** que reproduz o
 
 Tudo pode ser alterado por variável de ambiente.
 
-**Dispositivos** (lidas em [`dispositivos/simulador/simulador.py`](dispositivos/simulador/simulador.py)):
+**Dispositivos**, uma configuração por máquina (lidas em [`dispositivos/simulador/simulador.py`](dispositivos/simulador/simulador.py)). No Docker, ficam no bloco `maquina-mXX` do `docker-compose.yml`:
 
 | Variável | Padrão | Descrição |
 |---|---|---|
+| `MAQUINA_ID` | `M-01` | identidade da máquina (vira o `<id>` dos tópicos MQTT) |
+| `TIPO_PRODUTO` | `L` | classe do produto em processo: `L`, `M` ou `H` |
+| `DEGRADANDO` | `false` | se `true`, a máquina se degrada até falhar |
 | `MQTT_HOST` / `MQTT_PORT` | `localhost` / `1883` | broker |
-| `NUM_MAQUINAS` | `5` | máquinas simuladas |
-| `MAQUINA_DEGRADANDO` | `M-03` | qual máquina se degrada |
 | `INTERVALO_S` | `0.5` | segundos entre leituras (menor = demo mais rápida) |
 | `DERIVA_TORQUE` | `0.15` | velocidade da degradação (Nm por leitura) |
 | `ATRASO_DEGRADACAO` | `30` | leituras normais antes de começar a degradar |
@@ -228,6 +251,7 @@ Tudo pode ser alterado por variável de ambiente.
 | `LIMIAR_ALERTA` | `0.5` | risco que dispara o alerta |
 | `JANELA_TENDENCIA` | `60` | tamanho da janela deslizante |
 | `HORIZONTE_LEITURAS` | `50` | quantas leituras à frente a IA "olha" |
+| `SEM_SINAL_S` | `5` | segundos sem telemetria para o painel marcar a máquina como ⚪ sem sinal |
 
 **Docker Compose**: `MQTT_PORTA_HOST` (padrão `1883`) e `PAINEL_PORTA_HOST` (padrão `8501`).
 
@@ -241,7 +265,7 @@ Tudo pode ser alterado por variável de ambiente.
 │   └── *.schema.json              # telemetria, evento, comando, alerta
 ├── dispositivos/                  # CHÃO DE FÁBRICA (edge)
 │   └── simulador/                 # mock dos dispositivos: Dockerfile e requirements próprios
-│       ├── simulador.py           # "firmware": MQTT, telemetria, eventos, comandos
+│       ├── simulador.py           # "firmware" de UMA máquina (um container por máquina)
 │       └── maquina.py             # física da máquina (degradação e falhas reais)
 ├── plataforma/                    # PLATAFORMA (servidor/nuvem)
 │   ├── Dockerfile, requirements.txt
