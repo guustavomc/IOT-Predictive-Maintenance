@@ -1,0 +1,55 @@
+{
+  "fonte_dados": "sintético (regras AI4I)",
+  "registros": 10000,
+  "taxa_falha": 0.0623,
+  "limiar": 0.5,
+  "roc_auc": 0.9936,
+  "matriz_confusao": [
+    [
+      1867,
+      8
+    ],
+    [
+      7,
+      118
+    ]
+  ],
+  "relatorio": {
+    "normal": {
+      "precision": 0.996264674493063,
+      "recall": 0.9957333333333334,
+      "f1-score": 0.995998933048813,
+      "support": 1875.0
+    },
+    "falha": {
+      "precision": 0.9365079365079365,
+      "recall": 0.944,
+      "f1-score": 0.9402390438247012,
+      "support": 125.0
+    },
+    "accuracy": 0.9925,
+    "macro avg": {
+      "precision": 0.9663863055004998,
+      "recall": 0.9698666666666667,
+      "f1-score": 0.9681189884367571,
+      "support": 2000.0
+    },
+    "weighted avg": {
+      "precision": 0.9925298783689926,
+      "recall": 0.9925,
+      "f1-score": 0.9925139399723062,
+      "support": 2000.0
+    }
+  },
+  "importancia_features": {
+    "desgaste_x_torque": 0.222,
+    "torque_nm": 0.1814,
+    "potencia_w": 0.1553,
+    "rotacao_rpm": 0.1282,
+    "desgaste_min": 0.1268,
+    "delta_temp_k": 0.1258,
+    "temp_processo_k": 0.0276,
+    "temp_ar_k": 0.0237,
+    "tipo_cod": 0.0093
+  }
+}

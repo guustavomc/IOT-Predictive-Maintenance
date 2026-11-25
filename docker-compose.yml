@@ -1,0 +1,56 @@
+services:
+  # Broker MQTT: o "correio" entre os dispositivos e os serviços
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  # Treina o modelo uma vez e termina (se já existir modelos/modelo.joblib, retreina)
+  treino:
+    build: .
+    command: python -m src.treinar_modelo
+    volumes:
+      - ./data:/app/data
+      - ./modelos:/app/modelos
+
+  # Mock dos dispositivos IoT
+  simulador:
+    build: .
+    command: python -m src.simulador
+    environment:
+      MQTT_HOST: mosquitto
+    depends_on:
+      - mosquitto
+
+  # Ingestão do fluxo MQTT + inferência da IA + gravação no banco
+  inferencia:
+    build: .
+    command: python -m src.servico_inferencia
+    environment:
+      MQTT_HOST: mosquitto
+    volumes:
+      - ./modelos:/app/modelos
+      - runtime:/app/runtime
+    depends_on:
+      mosquitto:
+        condition: service_started
+      treino:
+        condition: service_completed_successfully
+
+  # Painel web em http://localhost:8501
+  painel:
+    build: .
+    command: streamlit run src/painel.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    environment:
+      MQTT_HOST: mosquitto
+    ports:
+      - "8501:8501"
+    volumes:
+      - runtime:/app/runtime
+    depends_on:
+      - inferencia
+
+volumes:
+  runtime:
