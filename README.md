@@ -146,6 +146,14 @@ Abra **http://localhost:8501**. O compose sobe, nesta ordem: broker → treino d
 
 Para parar: `Ctrl+C` e `docker compose down` (use `docker compose down -v` para apagar também o histórico do banco).
 
+> **Erro `Bind for 0.0.0.0:1883 failed: port is already allocated`?** Já existe outro broker MQTT na sua máquina (ex.: o Mosquitto instalado como serviço do Windows). Os serviços do compose não dependem dessa porta, então basta publicar o broker em outra:
+>
+> ```powershell
+> $env:MQTT_PORTA_HOST = "1884"; docker compose up --build
+> ```
+>
+> (Linux/macOS: `MQTT_PORTA_HOST=1884 docker compose up --build`.) O mesmo vale para o painel com `PAINEL_PORTA_HOST`.
+
 ### Opção B: local, sem Docker
 
 Pré-requisitos: Python 3.11+ e um broker MQTT na porta 1883 (ex.: [Mosquitto](https://mosquitto.org/download/) instalado, ou só o broker via Docker: `docker run -p 1883:1883 -v ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf eclipse-mosquitto:2`).

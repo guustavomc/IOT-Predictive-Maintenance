@@ -110,7 +110,7 @@ def ao_vivo():
     )
     limiar = alt.Chart(pd.DataFrame({"y": [config.LIMIAR_ALERTA]})).mark_rule(
         color="red", strokeDash=[6, 4]).encode(y="y:Q")
-    st.altair_chart(linhas + limiar, use_container_width=True)
+    st.altair_chart(linhas + limiar, width="stretch")
 
     maquina = st.selectbox("Sensores da máquina", sorted(leituras["maquina_id"].unique()),
                            index=sorted(leituras["maquina_id"].unique()).index(config.MAQUINA_DEGRADANDO)

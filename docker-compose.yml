@@ -1,9 +1,13 @@
 services:
-  # Broker MQTT: o "correio" entre os dispositivos e os serviços
+  # Broker MQTT: o "correio" entre os dispositivos e os serviços.
+  # Os serviços abaixo usam a rede interna do Docker (mosquitto:1883); a porta
+  # publicada no host só serve para dispositivos/ferramentas externas. Se a 1883
+  # já estiver em uso (ex.: Mosquitto instalado no Windows), troque com
+  # MQTT_PORTA_HOST=1884.
   mosquitto:
     image: eclipse-mosquitto:2
     ports:
-      - "1883:1883"
+      - "${MQTT_PORTA_HOST:-1883}:1883"
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
@@ -39,14 +43,14 @@ services:
       treino:
         condition: service_completed_successfully
 
-  # Painel web em http://localhost:8501
+  # Painel web em http://localhost:8501 (porta configurável com PAINEL_PORTA_HOST)
   painel:
     build: .
     command: streamlit run src/painel.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
     environment:
       MQTT_HOST: mosquitto
     ports:
-      - "8501:8501"
+      - "${PAINEL_PORTA_HOST:-8501}:8501"
     volumes:
       - runtime:/app/runtime
     depends_on:
