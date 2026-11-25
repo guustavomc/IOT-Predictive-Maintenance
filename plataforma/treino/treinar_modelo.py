@@ -14,20 +14,21 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from src import config, fisica
+from plataforma.comum import config, features
+from plataforma.treino import dataset_sintetico
 
 
 def carregar_dados() -> tuple[pd.DataFrame, str]:
     if config.DATASET_PATH.exists():
-        df = pd.read_csv(config.DATASET_PATH).rename(columns=fisica.COLUNAS_AI4I)
+        df = pd.read_csv(config.DATASET_PATH).rename(columns=features.COLUNAS_AI4I)
         return df, f"AI4I 2020 ({config.DATASET_PATH.name})"
     print(f"AVISO: {config.DATASET_PATH} não encontrado. Usando dataset SINTÉTICO no formato AI4I.")
     print("       Para o relatório, baixe o dataset real (instruções no README).")
-    return fisica.gerar_dataset_sintetico(), "sintético (regras AI4I)"
+    return dataset_sintetico.gerar(), "sintético (regras AI4I)"
 
 
 def modo_principal(linha) -> str:
-    for modo in fisica.MODOS_FALHA:
+    for modo in features.MODOS_FALHA:
         if linha[modo] == 1:
             return modo
     return "RNF"  # no AI4I existem poucas falhas sem modo marcado
@@ -35,7 +36,7 @@ def modo_principal(linha) -> str:
 
 def main():
     df, fonte = carregar_dados()
-    X = fisica.montar_features(df)
+    X = features.montar_features(df)
     y = df["falha"]
     print(f"Fonte: {fonte} | {len(df)} registros | taxa de falha: {y.mean():.2%}")
 
@@ -56,7 +57,7 @@ def main():
     print(f"ROC AUC: {roc_auc_score(y_te, prob):.4f}")
 
     importancias = dict(sorted(
-        zip(fisica.FEATURES, modelo_falha.feature_importances_.round(4).tolist()),
+        zip(features.FEATURES, modelo_falha.feature_importances_.round(4).tolist()),
         key=lambda kv: -kv[1],
     ))
     print("Importância das features:", importancias)
@@ -64,7 +65,7 @@ def main():
     # Modelo de tipo de falha: treinado só com as leituras que falharam
     falhas = df[df["falha"] == 1]
     modelo_tipo = RandomForestClassifier(n_estimators=100, random_state=42)
-    modelo_tipo.fit(fisica.montar_features(falhas), falhas.apply(modo_principal, axis=1))
+    modelo_tipo.fit(features.montar_features(falhas), falhas.apply(modo_principal, axis=1))
 
     # Na inferência chega uma leitura por vez: paralelismo só atrapalha
     modelo_falha.n_jobs = 1
@@ -72,7 +73,7 @@ def main():
     config.MODELO_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {"modelo_falha": modelo_falha, "modelo_tipo": modelo_tipo,
-         "features": fisica.FEATURES, "fonte_dados": fonte},
+         "features": features.FEATURES, "fonte_dados": fonte},
         config.MODELO_PATH,
     )
     metricas = {

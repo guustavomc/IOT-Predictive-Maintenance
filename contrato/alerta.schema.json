@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "alerta.schema.json",
+  "title": "Alerta de manutenção preditiva",
+  "description": "Publicado pela plataforma em fabrica/alertas (QoS 1) quando a IA prevê risco de falha. Qualquer sistema (ERP, app, sirene) pode assinar.",
+  "type": "object",
+  "required": ["maquina_id", "ts", "risco", "tipo_falha", "mensagem"],
+  "properties": {
+    "maquina_id": { "type": "string" },
+    "ts": { "type": "number" },
+    "risco": { "type": "number", "minimum": 0, "maximum": 1, "description": "Probabilidade de falha prevista (média móvel)." },
+    "tipo_falha": { "enum": ["TWF", "HDF", "PWF", "OSF", "RNF"], "description": "Modo de falha mais provável segundo a IA." },
+    "mensagem": { "type": "string" }
+  },
+  "additionalProperties": true
+}

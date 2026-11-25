@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "evento.schema.json",
+  "title": "Evento de máquina",
+  "description": "Publicado pelo dispositivo em fabrica/maquinas/<id>/evento (QoS 1): falha física real (alarme do CLP) ou manutenção concluída.",
+  "type": "object",
+  "required": ["maquina_id", "ts", "evento"],
+  "properties": {
+    "maquina_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+    "ts": { "type": "number" },
+    "evento": { "enum": ["falha", "manutencao"] },
+    "detalhe": {
+      "type": "string",
+      "description": "Para 'falha': modos separados por vírgula (TWF, HDF, PWF, OSF, RNF). Para 'manutencao': 'preventiva' ou 'corretiva'."
+    }
+  },
+  "additionalProperties": true
+}

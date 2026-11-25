@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "telemetria.schema.json",
+  "title": "Telemetria de máquina",
+  "description": "Leitura dos sensores publicada pelo dispositivo em fabrica/maquinas/<id>/telemetria (QoS 0).",
+  "type": "object",
+  "required": ["maquina_id", "ts", "tipo", "temp_ar_k", "temp_processo_k", "rotacao_rpm", "torque_nm", "desgaste_min"],
+  "properties": {
+    "maquina_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "description": "Identificador da máquina (igual ao <id> do tópico)." },
+    "ts": { "type": "number", "description": "Momento da leitura no relógio do dispositivo (epoch, segundos)." },
+    "tipo": { "enum": ["L", "M", "H"], "description": "Classe de qualidade do produto em processo (Low/Medium/High)." },
+    "temp_ar_k": { "type": "number", "minimum": 250, "maximum": 350, "description": "Temperatura do ar ambiente (K)." },
+    "temp_processo_k": { "type": "number", "minimum": 250, "maximum": 400, "description": "Temperatura do processo (K)." },
+    "rotacao_rpm": { "type": "number", "minimum": 0, "maximum": 5000, "description": "Rotação do eixo (rpm)." },
+    "torque_nm": { "type": "number", "minimum": 0, "maximum": 200, "description": "Torque (N·m)." },
+    "desgaste_min": { "type": "number", "minimum": 0, "description": "Tempo de uso da ferramenta atual (min)." }
+  },
+  "additionalProperties": true
+}
