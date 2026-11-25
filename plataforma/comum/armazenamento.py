@@ -5,7 +5,7 @@ Isolada neste módulo para facilitar a troca por um banco de séries temporais
 """
 import sqlite3
 
-from src import config
+from plataforma.comum import config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leituras (

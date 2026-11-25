@@ -1,5 +1,14 @@
+x-plataforma: &plataforma
+  build:
+    context: .
+    dockerfile: plataforma/Dockerfile
+  image: iot-pm-plataforma
+  environment:
+    MQTT_HOST: mosquitto
+
 services:
-  # Broker MQTT: o "correio" entre os dispositivos e os serviços.
+  # ======================= REDE / BROKER =======================
+  # Broker MQTT: o "correio" entre o chão de fábrica e a plataforma.
   # Os serviços abaixo usam a rede interna do Docker (mosquitto:1883); a porta
   # publicada no host só serve para dispositivos/ferramentas externas. Se a 1883
   # já estiver em uso (ex.: Mosquitto instalado no Windows), troque com
@@ -11,29 +20,28 @@ services:
     volumes:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
-  # Treina o modelo uma vez e termina (se já existir modelos/modelo.joblib, retreina)
-  treino:
-    build: .
-    command: python -m src.treinar_modelo
-    volumes:
-      - ./data:/app/data
-      - ./modelos:/app/modelos
-
-  # Mock dos dispositivos IoT
+  # ================= CHÃO DE FÁBRICA (dispositivos/) =================
+  # Mock dos dispositivos IoT: imagem própria, sem nenhum código da plataforma.
   simulador:
-    build: .
-    command: python -m src.simulador
+    build: ./dispositivos/simulador
     environment:
       MQTT_HOST: mosquitto
     depends_on:
       - mosquitto
 
-  # Ingestão do fluxo MQTT + inferência da IA + gravação no banco
+  # ======================= PLATAFORMA (plataforma/) =======================
+  # Treina o modelo uma vez e termina (se já existir modelos/modelo.joblib, retreina)
+  treino:
+    <<: *plataforma
+    command: python -m plataforma.treino.treinar_modelo
+    volumes:
+      - ./data:/app/data
+      - ./modelos:/app/modelos
+
+  # Ingestão do fluxo MQTT + validação do contrato + inferência da IA + gravação no banco
   inferencia:
-    build: .
-    command: python -m src.servico_inferencia
-    environment:
-      MQTT_HOST: mosquitto
+    <<: *plataforma
+    command: python -m plataforma.inferencia.servico
     volumes:
       - ./modelos:/app/modelos
       - runtime:/app/runtime
@@ -45,10 +53,8 @@ services:
 
   # Painel web em http://localhost:8501 (porta configurável com PAINEL_PORTA_HOST)
   painel:
-    build: .
-    command: streamlit run src/painel.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
-    environment:
-      MQTT_HOST: mosquitto
+    <<: *plataforma
+    command: streamlit run plataforma/painel/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
     ports:
       - "${PAINEL_PORTA_HOST:-8501}:8501"
     volumes:

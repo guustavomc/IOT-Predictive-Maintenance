@@ -25,7 +25,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src import armazenamento, config, fisica, mqtt_util
+from plataforma.comum import armazenamento, config, contrato, features, mqtt_util
 
 LOTE_S = 0.5  # intervalo entre micro-lotes
 
@@ -50,7 +50,7 @@ def projetar(janela) -> dict:
         return ultima  # ainda sem histórico suficiente: usa o estado atual
     x = np.arange(len(janela))
     x_futuro = len(janela) - 1 + config.HORIZONTE_LEITURAS
-    for sensor in fisica.SENSORES:
+    for sensor in features.SENSORES:
         inclinacao, intercepto = np.polyfit(x, [l[sensor] for l in janela], 1)
         ultima[sensor] = float(np.clip(inclinacao * x_futuro + intercepto, *LIMITES[sensor]))
     return ultima
@@ -79,7 +79,7 @@ class ServicoInferencia:
 
         # Passo 2: UMA predição vetorizada para o lote inteiro
         if linhas_modelo:
-            X = fisica.montar_features(pd.DataFrame(linhas_modelo))
+            X = features.montar_features(pd.DataFrame(linhas_modelo))
             probs = self.modelo_falha.predict_proba(X)[:, 1]
 
         # Passo 3 (em ordem): risco, alertas e eventos
@@ -108,7 +108,7 @@ class ServicoInferencia:
                     "maquina_id": dados["maquina_id"],
                     "risco": round(risco, 3),
                     "tipo_falha": modo,
-                    "mensagem": f"Risco de falha {risco:.0%} - provável causa: {fisica.NOMES_FALHA.get(modo, modo)}",
+                    "mensagem": f"Risco de falha {risco:.0%} - provável causa: {features.NOMES_FALHA.get(modo, modo)}",
                 })
 
         armazenamento.salvar_leituras(self.con, leituras_db)
@@ -120,7 +120,8 @@ class ServicoInferencia:
 
 def main():
     if not config.MODELO_PATH.exists():
-        raise SystemExit(f"Modelo não encontrado em {config.MODELO_PATH}. Rode antes: python -m src.treinar_modelo")
+        raise SystemExit(f"Modelo não encontrado em {config.MODELO_PATH}. "
+                         "Rode antes: python -m plataforma.treino.treinar_modelo")
     artefato = joblib.load(config.MODELO_PATH)
     print(f"Modelo carregado (treinado com: {artefato['fonte_dados']})")
 
@@ -130,12 +131,24 @@ def main():
     def ao_conectar(cli, _userdata, _flags, _reason_code, _properties):
         cli.subscribe([(f"{config.TOPICO_BASE}/+/telemetria", 0), (f"{config.TOPICO_BASE}/+/evento", 1)])
 
+    descartadas = 0
+
     def ao_receber(_cli, _userdata, msg):
+        # Não confiamos no que chega da rede: valida contra o contrato (contrato/*.schema.json)
+        nonlocal descartadas
+        nome = "telemetria" if msg.topic.endswith("/telemetria") else "evento"
         try:
-            tipo = "leitura" if msg.topic.endswith("/telemetria") else "evento"
-            fila.put((tipo, json.loads(msg.payload)))
-        except ValueError as erro:  # JSON inválido não pode derrubar o serviço
-            print(f"Mensagem inválida em {msg.topic}: {erro!r}")
+            dados = json.loads(msg.payload)
+        except ValueError:
+            dados = None
+        problemas = ["payload não é JSON"] if dados is None else contrato.erros(nome, dados)
+        if not problemas and dados["maquina_id"] != msg.topic.split("/")[2]:
+            problemas = ["maquina_id diferente do <id> do tópico"]
+        if problemas:
+            descartadas += 1
+            print(f"Mensagem fora do contrato descartada ({msg.topic}): {problemas[:3]}")
+            return
+        fila.put(("leitura" if nome == "telemetria" else "evento", dados))
 
     cliente.on_connect = ao_conectar  # dispara ao receber o CONNACK (e em reconexões)
     cliente.on_message = ao_receber

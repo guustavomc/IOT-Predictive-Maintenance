@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "comando.schema.json",
+  "title": "Comando para a máquina",
+  "description": "Publicado pela plataforma em fabrica/maquinas/<id>/comando (QoS 1) e executado pelo dispositivo.",
+  "type": "object",
+  "required": ["acao"],
+  "properties": {
+    "acao": { "enum": ["manutencao"], "description": "manutencao: realizar manutenção preventiva agora." }
+  },
+  "additionalProperties": true
+}

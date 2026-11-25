@@ -1,20 +1,21 @@
 """Painel de monitoramento (Streamlit).
 
-Rode com:  streamlit run src/painel.py
+Rode (da raiz do repositório) com:  streamlit run plataforma/painel/app.py
 """
 import json
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # permite `from src import ...`
+# o Streamlit roda o arquivo como script: coloca a raiz do repo no path para `from plataforma ...`
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import altair as alt
 import pandas as pd
 import paho.mqtt.publish as publish
 import streamlit as st
 
-from src import armazenamento, config, fisica
+from plataforma.comum import armazenamento, config
 
 st.set_page_config(page_title="Manutenção Preditiva", page_icon="🏭", layout="wide")
 st.title("🏭 Manutenção Preditiva Industrial: IoT + IA")
@@ -112,9 +113,11 @@ def ao_vivo():
         color="red", strokeDash=[6, 4]).encode(y="y:Q")
     st.altair_chart(linhas + limiar, width="stretch")
 
-    maquina = st.selectbox("Sensores da máquina", sorted(leituras["maquina_id"].unique()),
-                           index=sorted(leituras["maquina_id"].unique()).index(config.MAQUINA_DEGRADANDO)
-                           if config.MAQUINA_DEGRADANDO in leituras["maquina_id"].values else 0)
+    maquinas = sorted(leituras["maquina_id"].unique())
+    if st.session_state.get("maquina_sel") not in maquinas:
+        # padrão: a máquina que a IA considera mais arriscada na janela
+        st.session_state["maquina_sel"] = leituras.loc[leituras["risco"].idxmax(), "maquina_id"]
+    maquina = st.selectbox("Sensores da máquina", maquinas, key="maquina_sel")
     dm = leituras[leituras["maquina_id"] == maquina].copy()
     dm["delta_temp_k"] = dm["temp_processo_k"] - dm["temp_ar_k"]
     dm["desgaste_x_torque"] = dm["desgaste_min"] * dm["torque_nm"]
@@ -123,7 +126,6 @@ def ao_vivo():
     g2.line_chart(dm, x="hora", y="desgaste_min", height=180)
     g3.line_chart(dm, x="hora", y="rotacao_rpm", height=180)
     g4.line_chart(dm, x="hora", y="desgaste_x_torque", height=180)
-    st.caption(f"Limite de sobrecarga (desgaste × torque) para tipo L/M/H: {fisica.LIMITE_SOBRECARGA}")
 
     # --- Alertas, eventos e validação --------------------------------------
     c1, c2 = st.columns(2)

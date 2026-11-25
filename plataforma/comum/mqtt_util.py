@@ -3,7 +3,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
-from src import config
+from plataforma.comum import config
 
 
 def conectar(client_id: str) -> mqtt.Client:

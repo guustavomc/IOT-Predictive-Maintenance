@@ -28,9 +28,11 @@ Cada máquina tem sensores de **temperatura do ar**, **temperatura do processo**
 
 ## 3. Arquitetura
 
+O repositório segue a divisão real de um sistema IoT: o **chão de fábrica** (`dispositivos/`) e a **plataforma** (`plataforma/`) são projetos independentes, com imagens Docker e dependências próprias. Eles não compartilham código, só o **contrato** de comunicação (`contrato/`): tópicos MQTT + JSON Schemas.
+
 ```mermaid
 flowchart LR
-    subgraph Chão de fábrica
+    subgraph DISP["Chão de fábrica · dispositivos/"]
         S1[Máquina M-01<br/>sensores]
         S2[Máquina M-02<br/>sensores]
         S3[Máquina M-03<br/>⚠ degradando]
@@ -38,36 +40,48 @@ flowchart LR
 
     S1 & S2 & S3 -- "MQTT publish<br/>fabrica/maquinas/&lt;id&gt;/telemetria" --> B[(Broker MQTT<br/>Mosquitto)]
 
-    B -- subscribe --> I[Serviço de Inferência<br/>janela deslizante + projeção<br/>+ modelo de IA]
-    M[(Modelo treinado<br/>modelo.joblib)] --> I
-    T[Treino do modelo<br/>dataset AI4I 2020] --> M
-    I -- grava --> DB[(Banco de telemetria<br/>SQLite)]
+    subgraph PLAT["Plataforma · plataforma/"]
+        I[Serviço de Inferência<br/>valida contrato + janela deslizante<br/>+ projeção + modelo de IA]
+        M[(Modelo treinado<br/>modelo.joblib)]
+        T[Treino do modelo<br/>dataset AI4I 2020]
+        DB[(Banco de telemetria<br/>SQLite)]
+        P[Painel Streamlit<br/>localhost:8501]
+    end
+
+    B -- subscribe --> I
+    M --> I
+    T --> M
+    I -- grava --> DB
     I -- "fabrica/alertas" --> B
-    DB --> P[Painel Streamlit<br/>localhost:8501]
+    DB --> P
     P -- "fabrica/maquinas/&lt;id&gt;/comando<br/>(ordem de manutenção)" --> B
     B -- comando --> S3
 ```
 
 ### Componentes
 
-| Componente | Arquivo | Papel |
-|---|---|---|
-| Mock dos dispositivos IoT | [`src/simulador.py`](src/simulador.py) | simula N máquinas com sensores; uma delas se degrada até falhar |
-| Física das máquinas | [`src/fisica.py`](src/fisica.py) | regras de falha do AI4I e engenharia de features (compartilhado entre simulador, treino e inferência) |
-| Broker MQTT | [`mosquitto/mosquitto.conf`](mosquitto/mosquitto.conf) | Eclipse Mosquitto |
-| Treino da IA | [`src/treinar_modelo.py`](src/treinar_modelo.py) | treina os modelos e salva métricas em `modelos/metricas.json` |
-| Ingestão + inferência | [`src/servico_inferencia.py`](src/servico_inferencia.py) | consome o MQTT, calcula o risco, grava no banco, dispara alertas |
-| Armazenamento | [`src/armazenamento.py`](src/armazenamento.py) | SQLite (isolado para poder trocar por InfluxDB/TimescaleDB) |
-| Painel | [`src/painel.py`](src/painel.py) | monitoramento ao vivo, alertas, botão de manutenção e validação |
+| Lado | Componente | Arquivo | Papel |
+|---|---|---|---|
+| Chão de fábrica | Mock dos dispositivos IoT | [`dispositivos/simulador/simulador.py`](dispositivos/simulador/simulador.py) | o "firmware": lê sensores, publica telemetria/eventos, executa comandos |
+| Chão de fábrica | Física da máquina | [`dispositivos/simulador/maquina.py`](dispositivos/simulador/maquina.py) | como a máquina se comporta, degrada e quebra (a plataforma **não** vê isso) |
+| Contrato | Tópicos + JSON Schemas | [`contrato/`](contrato/README.md) | o único acoplamento entre os dois lados |
+| Rede | Broker MQTT | [`mosquitto/mosquitto.conf`](mosquitto/mosquitto.conf) | Eclipse Mosquitto |
+| Plataforma | Treino da IA | [`plataforma/treino/treinar_modelo.py`](plataforma/treino/treinar_modelo.py) | treina os modelos e salva métricas em `modelos/metricas.json` |
+| Plataforma | Ingestão + inferência | [`plataforma/inferencia/servico.py`](plataforma/inferencia/servico.py) | valida as mensagens, calcula o risco, grava no banco, dispara alertas |
+| Plataforma | Features | [`plataforma/comum/features.py`](plataforma/comum/features.py) | engenharia de atributos (igual no treino e na inferência) |
+| Plataforma | Armazenamento | [`plataforma/comum/armazenamento.py`](plataforma/comum/armazenamento.py) | SQLite (isolado para poder trocar por InfluxDB/TimescaleDB) |
+| Plataforma | Painel | [`plataforma/painel/app.py`](plataforma/painel/app.py) | monitoramento ao vivo, alertas, botão de manutenção e validação |
 
-### Tópicos MQTT
+### Contrato: tópicos MQTT
+
+Detalhes e schemas em [`contrato/README.md`](contrato/README.md). A plataforma valida toda mensagem recebida e descarta o que estiver fora do contrato.
 
 | Tópico | Direção | Conteúdo |
 |---|---|---|
-| `fabrica/maquinas/<id>/telemetria` | máquina → sistema | leitura dos sensores |
-| `fabrica/maquinas/<id>/evento` | máquina → sistema | `falha` (com o modo) ou `manutencao` (`preventiva`/`corretiva`) |
-| `fabrica/maquinas/<id>/comando` | painel → máquina | `{"acao": "manutencao"}` |
-| `fabrica/alertas` | sistema → quem assinar | alerta da IA (risco + causa provável) |
+| `fabrica/maquinas/<id>/telemetria` | máquina → plataforma | leitura dos sensores |
+| `fabrica/maquinas/<id>/evento` | máquina → plataforma | `falha` (com o modo) ou `manutencao` (`preventiva`/`corretiva`) |
+| `fabrica/maquinas/<id>/comando` | plataforma → máquina | `{"acao": "manutencao"}` |
+| `fabrica/alertas` | plataforma → quem assinar | alerta da IA (risco + causa provável) |
 
 Exemplo de telemetria:
 
@@ -86,15 +100,15 @@ Exemplo de telemetria:
 
 ## 4. O dispositivo simulado (mock)
 
-Como não temos uma fábrica real, o [`simulador.py`](src/simulador.py) faz o papel do hardware: cada máquina simulada se comporta como um microcontrolador (ex.: ESP32) com sensores, publicando o JSON acima no broker.
+Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](dispositivos/simulador/) faz o papel do hardware: cada máquina simulada se comporta como um microcontrolador (ex.: ESP32) com sensores, publicando o JSON acima no broker. Ele é um projeto à parte, com imagem Docker e dependências próprias (só `paho-mqtt` e `numpy`), e **não importa nada da plataforma**.
 
 - **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina antes de o desgaste ficar perigoso.
 - **Máquina degradando** (`M-03` por padrão): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
 - Quando falha, a máquina **para** (não envia telemetria), publica o evento `falha` e, depois de um tempo, volta com manutenção corretiva. Se o painel mandar uma ordem de manutenção **antes**, ela é feita preventivamente e a falha é evitada.
 
-As leituras simuladas seguem **a mesma distribuição e as mesmas regras físicas do dataset de treino**, para que as previsões façam sentido.
+A física da máquina ([`maquina.py`](dispositivos/simulador/maquina.py)) segue o processo documentado do AI4I 2020, para que a telemetria simulada seja realista. Ela fica **só do lado do dispositivo**: a IA nunca vê essas regras. Ela aprende os padrões com os dados históricos e recebe apenas a telemetria, como numa fábrica de verdade.
 
-> **Trocar o mock por hardware real** não exige mudar nenhum outro serviço: basta o dispositivo publicar o mesmo JSON no tópico `fabrica/maquinas/<id>/telemetria`. Por exemplo, um ESP32 com a biblioteca `PubSubClient` (Arduino) apontando para o IP do broker na porta 1883.
+> **Trocar o mock por hardware real** não exige mudar nenhuma linha da plataforma: basta o dispositivo seguir o [contrato](contrato/README.md). Por exemplo, um ESP32 com a biblioteca `PubSubClient` (Arduino) publicando o mesmo JSON em `fabrica/maquinas/<id>/telemetria`.
 
 ## 5. O modelo de IA
 
@@ -161,17 +175,17 @@ Pré-requisitos: Python 3.11+ e um broker MQTT na porta 1883 (ex.: [Mosquitto](h
 ```bash
 python -m venv .venv
 # Windows: .venv\Scripts\activate   |   Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r plataforma/requirements.txt -r dispositivos/simulador/requirements.txt
 
-python -m src.treinar_modelo          # 1x: treina e salva modelos/modelo.joblib
+python -m plataforma.treino.treinar_modelo     # 1x: treina e salva modelos/modelo.joblib
 ```
 
-Depois, cada um num terminal:
+Depois, cada um num terminal (sempre a partir da raiz do repositório):
 
 ```bash
-python -m src.servico_inferencia      # terminal 1
-python -m src.simulador               # terminal 2
-streamlit run src/painel.py           # terminal 3 -> http://localhost:8501
+python -m plataforma.inferencia.servico        # terminal 1: plataforma
+streamlit run plataforma/painel/app.py         # terminal 2: plataforma -> http://localhost:8501
+python dispositivos/simulador/simulador.py     # terminal 3: chão de fábrica
 ```
 
 ### Roteiro da demonstração (vídeo)
@@ -189,11 +203,13 @@ O treino procura `data/ai4i2020.csv`. Para baixar:
 1. Acesse https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset
 2. Baixe, extraia e salve o CSV como `data/ai4i2020.csv`
 
-Se o arquivo não existir, o treino usa um **dataset sintético** gerado com as mesmas regras do AI4I (`fisica.gerar_dataset_sintetico`). Isso serve para o projeto rodar de imediato, mas **para o relatório usem o dataset real**.
+Se o arquivo não existir, o treino usa um **dataset sintético** que reproduz o processo de geração publicado do AI4I ([`plataforma/treino/dataset_sintetico.py`](plataforma/treino/dataset_sintetico.py)). Isso serve para o projeto rodar de imediato, mas **para o relatório usem o dataset real**.
 
 ## 8. Configuração
 
-Todas as opções ficam em [`src/config.py`](src/config.py) e podem ser alteradas por variável de ambiente:
+Tudo pode ser alterado por variável de ambiente.
+
+**Dispositivos** (lidas em [`dispositivos/simulador/simulador.py`](dispositivos/simulador/simulador.py)):
 
 | Variável | Padrão | Descrição |
 |---|---|---|
@@ -203,34 +219,44 @@ Todas as opções ficam em [`src/config.py`](src/config.py) e podem ser alterada
 | `INTERVALO_S` | `0.5` | segundos entre leituras (menor = demo mais rápida) |
 | `DERIVA_TORQUE` | `0.15` | velocidade da degradação (Nm por leitura) |
 | `ATRASO_DEGRADACAO` | `30` | leituras normais antes de começar a degradar |
+
+**Plataforma** (em [`plataforma/comum/config.py`](plataforma/comum/config.py)):
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `MQTT_HOST` / `MQTT_PORT` | `localhost` / `1883` | broker |
 | `LIMIAR_ALERTA` | `0.5` | risco que dispara o alerta |
 | `JANELA_TENDENCIA` | `60` | tamanho da janela deslizante |
 | `HORIZONTE_LEITURAS` | `50` | quantas leituras à frente a IA "olha" |
 
+**Docker Compose**: `MQTT_PORTA_HOST` (padrão `1883`) e `PAINEL_PORTA_HOST` (padrão `8501`).
+
 ## 9. Estrutura do repositório
 
 ```
-├── docker-compose.yml        # orquestra broker + treino + inferência + simulador + painel
-├── Dockerfile                # imagem Python única para os serviços
-├── requirements.txt
-├── mosquitto/mosquitto.conf  # configuração do broker MQTT
-├── data/                     # dataset AI4I (ai4i2020.csv)
-├── modelos/                  # modelo treinado (.joblib) e metricas.json
-└── src/
-    ├── config.py             # configuração central
-    ├── fisica.py             # regras físicas/falhas + features
-    ├── simulador.py          # mock dos dispositivos IoT
-    ├── treinar_modelo.py     # treino da IA
-    ├── servico_inferencia.py # ingestão MQTT + IA em tempo real
-    ├── armazenamento.py      # persistência (SQLite)
-    ├── mqtt_util.py          # conexão MQTT com retry
-    └── painel.py             # dashboard Streamlit
+├── docker-compose.yml             # sobe broker + dispositivos + plataforma
+├── mosquitto/mosquitto.conf       # configuração do broker MQTT
+├── contrato/                      # ÚNICO acoplamento entre os dois lados
+│   ├── README.md                  # tópicos, QoS e exemplos
+│   └── *.schema.json              # telemetria, evento, comando, alerta
+├── dispositivos/                  # CHÃO DE FÁBRICA (edge)
+│   └── simulador/                 # mock dos dispositivos: Dockerfile e requirements próprios
+│       ├── simulador.py           # "firmware": MQTT, telemetria, eventos, comandos
+│       └── maquina.py             # física da máquina (degradação e falhas reais)
+├── plataforma/                    # PLATAFORMA (servidor/nuvem)
+│   ├── Dockerfile, requirements.txt
+│   ├── comum/                     # config, features, contrato, MQTT, armazenamento
+│   ├── treino/                    # treino da IA (+ dataset sintético de reserva)
+│   ├── inferencia/servico.py      # ingestão + validação + IA em tempo real
+│   └── painel/app.py              # dashboard Streamlit
+├── data/                          # dataset AI4I (ai4i2020.csv)
+└── modelos/                       # modelo treinado (.joblib) e metricas.json
 ```
 
 ## 10. Próximos passos
 
 - **Explicabilidade (XAI):** usar SHAP para mostrar, em cada alerta, quais sensores mais contribuíram para o risco.
-- **Banco de séries temporais:** trocar o SQLite por InfluxDB ou TimescaleDB (a troca fica isolada em `armazenamento.py`) e usar Grafana.
+- **Banco de séries temporais:** trocar o SQLite por InfluxDB ou TimescaleDB (a troca fica isolada em `plataforma/comum/armazenamento.py`) e usar Grafana.
 - **Limiar por custo:** escolher o limiar que minimiza *custo de parada × falsos negativos + custo de manutenção × falsos positivos*.
 - **Vida útil remanescente (RUL):** estimar "quantas horas faltam" com modelos de séries temporais (ex.: dataset NASA C-MAPSS).
 - **Hardware real:** ESP32 com sensores reais publicando no mesmo tópico.
