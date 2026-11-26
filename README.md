@@ -80,6 +80,7 @@ Detalhes e schemas em [`contrato/README.md`](contrato/README.md). A plataforma v
 |---|---|---|
 | `fabrica/maquinas/<id>/telemetria` | máquina → plataforma | leitura dos sensores |
 | `fabrica/maquinas/<id>/evento` | máquina → plataforma | `falha` (com o modo) ou `manutencao` (`preventiva`/`corretiva`) |
+| `fabrica/maquinas/<id>/status` | máquina **ou broker** → plataforma | `online`/`offline`, retido; o `offline` por queda é publicado pelo broker (Last Will) |
 | `fabrica/maquinas/<id>/comando` | plataforma → máquina | `{"acao": "manutencao"}` |
 | `fabrica/alertas` | plataforma → quem assinar | alerta da IA (risco + causa provável) |
 
@@ -111,6 +112,9 @@ Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](disposi
 | `maquina-m03` | M-03 | L | **degrada até falhar** |
 | `maquina-m04` | M-04 | H | saudável |
 | `maquina-m05` | M-05 | M | saudável |
+| *(Wokwi, opcional)* | M-06 | L | **ESP32 com sensores reais**, controlado por você (ver [`dispositivos/esp32-wokwi/`](dispositivos/esp32-wokwi/README.md)) |
+
+**Status de conexão com Last Will.** Antes de conectar, cada dispositivo registra no broker um *testamento*: "se eu sumir, publique `offline` por mim". Ao conectar, publica `online`. Ao ser desligado normalmente, avisa `offline (desligamento)`. Se cair sem aviso (energia, rede, travamento), **o próprio broker** publica `offline (conexao_perdida)`. As mensagens são retidas, então a plataforma sabe o estado de todas as máquinas mesmo se reiniciar depois delas.
 
 - **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina aos 100 min de uso, bem antes da faixa de fim de vida (200–240 min).
 - **Máquina degradando** (`DEGRADANDO=true`, a M-03): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
@@ -118,7 +122,7 @@ Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](disposi
 
 A física da máquina ([`maquina.py`](dispositivos/simulador/maquina.py)) segue o processo documentado do AI4I 2020, para que a telemetria simulada seja realista. Ela fica **só do lado do dispositivo**: a IA nunca vê essas regras. Ela aprende os padrões com os dados históricos e recebe apenas a telemetria, como numa fábrica de verdade.
 
-> **Trocar o mock por hardware real** não exige mudar nenhuma linha da plataforma: basta o dispositivo seguir o [contrato](contrato/README.md). Por exemplo, um ESP32 com a biblioteca `PubSubClient` (Arduino) publicando o mesmo JSON em `fabrica/maquinas/<id>/telemetria`.
+> **Trocar o mock por hardware real** não exige mudar nenhuma linha da plataforma: basta o dispositivo seguir o [contrato](contrato/README.md). A prova está em [`dispositivos/esp32-wokwi/`](dispositivos/esp32-wokwi/README.md): um firmware de ESP32 com DHT22, termistor, potenciômetros e LEDs, que roda no simulador Wokwi e aparece no painel como a máquina M-06.
 
 ## 5. O modelo de IA
 
@@ -236,7 +240,8 @@ foreach ($m in $maquinas) {
 3. O risco da IA sobe, a máquina vai para 🟡 atenção e depois 🔴 **ALERTA**, com a causa "Sobrecarga (desgaste x torque)".
 4. **Caminho A:** não fazer nada. A máquina falha (⛔ PARADA) e a tabela de validação mostra que **a IA avisou X segundos antes**.
 5. **Caminho B:** clicar em **🔧 Manutenção**. O comando vai via MQTT até a máquina, ela é reparada e a falha é **evitada** (contador "falhas evitadas").
-6. **Resiliência:** num terminal, `docker compose stop maquina-m02`. Só a M-02 vai para ⚪ **Sem sinal**, e as demais seguem normalmente. Com `docker compose start maquina-m02`, ela volta.
+6. **Last Will:** num terminal, `docker compose kill maquina-m02` (morte súbita). Quem avisa é **o broker**, e o painel mostra 🔌 **OFFLINE: conexão perdida (Last Will)** só na M-02, enquanto as demais seguem normalmente. Com `docker compose stop` (desligamento normal) a própria máquina avisa e o painel mostra "desligada". Com `docker compose start maquina-m02`, ela volta.
+7. **Hardware de verdade (opcional):** o ESP32 no Wokwi entra como M-06. Subindo o torque e baixando a rotação nos potenciômetros, a IA alerta e o LED vermelho do ESP32 acende (ver [`dispositivos/esp32-wokwi/`](dispositivos/esp32-wokwi/README.md)).
 
 ## 7. Dataset
 
@@ -273,6 +278,7 @@ Tudo pode ser alterado por variável de ambiente.
 | `JANELA_TENDENCIA` | `60` | tamanho da janela deslizante |
 | `HORIZONTE_LEITURAS` | `50` | quantas leituras à frente a IA "olha" |
 | `SEM_SINAL_S` | `5` | segundos sem telemetria para o painel marcar a máquina como ⚪ sem sinal |
+| `TOLERANCIA_RELOGIO_S` | `60` | se o relógio do dispositivo estiver mais longe que isso (ex.: sem NTP), usa o horário de recebimento |
 
 **Docker Compose**: `MQTT_PORTA_HOST` (padrão `1883`) e `PAINEL_PORTA_HOST` (padrão `8501`).
 
@@ -280,11 +286,15 @@ Tudo pode ser alterado por variável de ambiente.
 
 ```
 ├── docker-compose.yml             # sobe broker + dispositivos + plataforma
-├── mosquitto/mosquitto.conf       # configuração do broker MQTT
+├── docker-compose.wokwi.yml       # (opcional) liga o bridge para o ESP32 no Wokwi
+├── mosquitto/
+│   ├── mosquitto.conf             # configuração do broker MQTT
+│   └── mosquitto-wokwi.conf       # igual + bridge para o broker público (M-06)
 ├── contrato/                      # ÚNICO acoplamento entre os dois lados
 │   ├── README.md                  # tópicos, QoS e exemplos
 │   └── *.schema.json              # telemetria, evento, comando, alerta
 ├── dispositivos/                  # CHÃO DE FÁBRICA (edge)
+│   ├── esp32-wokwi/               # M-06: firmware ESP32 + circuito para o simulador Wokwi
 │   └── simulador/                 # mock dos dispositivos: Dockerfile e requirements próprios
 │       ├── simulador.py           # "firmware" de UMA máquina (um container por máquina)
 │       └── maquina.py             # física da máquina (degradação e falhas reais)
@@ -304,8 +314,8 @@ Tudo pode ser alterado por variável de ambiente.
 - **Banco de séries temporais:** trocar o SQLite por InfluxDB ou TimescaleDB (a troca fica isolada em `plataforma/comum/armazenamento.py`) e usar Grafana.
 - **Limiar por custo:** escolher o limiar que minimiza *custo de parada × falsos negativos + custo de manutenção × falsos positivos*.
 - **Vida útil remanescente (RUL):** estimar "quantas horas faltam" com modelos de séries temporais (ex.: dataset NASA C-MAPSS).
-- **Hardware real:** ESP32 com sensores reais publicando no mesmo tópico.
-- **Segurança:** autenticação e TLS no broker MQTT.
+- **Hardware físico:** gravar o firmware de [`dispositivos/esp32-wokwi/`](dispositivos/esp32-wokwi/) num ESP32 de verdade, apontando para o broker da fábrica.
+- **Segurança:** autenticação e TLS no broker MQTT (hoje `allow_anonymous`, e o ESP32 usa um broker público).
 
 ## Referências
 

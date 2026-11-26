@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "status.schema.json",
+  "title": "Status de conexão da máquina",
+  "description": "Publicado em fabrica/maquinas/<id>/status (QoS 1, RETIDO). 'online' pelo próprio dispositivo ao conectar; 'offline' pelo dispositivo ao desligar normalmente ou pelo BROKER (Last Will) se a conexão cair sem aviso.",
+  "type": "object",
+  "required": ["maquina_id", "status"],
+  "properties": {
+    "maquina_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+    "ts": { "type": "number", "description": "Relógio do dispositivo. No Last Will é o momento em que o testamento foi registrado (na conexão), não o da queda." },
+    "status": { "enum": ["online", "offline"] },
+    "motivo": { "type": "string", "description": "Para 'offline': 'desligamento' (aviso do próprio dispositivo) ou 'conexao_perdida' (Last Will publicado pelo broker)." }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "author": "IOT-Predictive-Maintenance",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-dht22", "id": "dht", "top": -105.3, "left": -130.2, "attrs": { "temperature": "27", "humidity": "40" } },
+    { "type": "wokwi-ntc-temperature-sensor", "id": "ntc", "top": 175.4, "left": -240.6, "attrs": { "temperature": "37" } },
+    { "type": "wokwi-potentiometer", "id": "potTorque", "top": -77.2, "left": 182.6, "attrs": { "value": "512" } },
+    { "type": "wokwi-potentiometer", "id": "potRotacao", "top": 30.3, "left": 182.6, "attrs": { "value": "367" } },
+    { "type": "wokwi-pushbutton", "id": "botao", "top": 236.6, "left": 163.2, "attrs": { "color": "blue", "label": "Troca de ferramenta" } },
+    { "type": "wokwi-led", "id": "ledOk", "top": 150, "left": 330, "attrs": { "color": "green", "label": "Online" } },
+    { "type": "wokwi-led", "id": "ledAlerta", "top": 150, "left": 390, "attrs": { "color": "red", "label": "Alerta IA" } },
+    { "type": "wokwi-resistor", "id": "r1", "top": 220, "left": 320, "rotate": 90, "attrs": { "value": "220" } },
+    { "type": "wokwi-resistor", "id": "r2", "top": 220, "left": 380, "rotate": 90, "attrs": { "value": "220" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+
+    [ "dht:VCC", "esp:3V3", "red", [] ],
+    [ "dht:GND", "esp:GND.1", "black", [] ],
+    [ "dht:SDA", "esp:15", "green", [] ],
+
+    [ "ntc:VCC", "esp:3V3", "red", [] ],
+    [ "ntc:GND", "esp:GND.1", "black", [] ],
+    [ "ntc:OUT", "esp:32", "orange", [] ],
+
+    [ "potTorque:VCC", "esp:3V3", "red", [] ],
+    [ "potTorque:GND", "esp:GND.2", "black", [] ],
+    [ "potTorque:SIG", "esp:34", "violet", [] ],
+
+    [ "potRotacao:VCC", "esp:3V3", "red", [] ],
+    [ "potRotacao:GND", "esp:GND.2", "black", [] ],
+    [ "potRotacao:SIG", "esp:35", "blue", [] ],
+
+    [ "botao:1.l", "esp:4", "gray", [] ],
+    [ "botao:2.l", "esp:GND.2", "black", [] ],
+
+    [ "esp:27", "ledOk:A", "green", [] ],
+    [ "ledOk:C", "r1:1", "black", [] ],
+    [ "r1:2", "esp:GND.2", "black", [] ],
+
+    [ "esp:26", "ledAlerta:A", "red", [] ],
+    [ "ledAlerta:C", "r2:1", "black", [] ],
+    [ "r2:2", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}

@@ -15,7 +15,7 @@ def _carregar(nome: str) -> Draft202012Validator:
     return Draft202012Validator(schema)
 
 
-VALIDADORES = {nome: _carregar(nome) for nome in ("telemetria", "evento", "comando", "alerta")}
+VALIDADORES = {nome: _carregar(nome) for nome in ("telemetria", "evento", "status", "comando", "alerta")}
 
 
 def erros(nome: str, mensagem: dict) -> list[str]:

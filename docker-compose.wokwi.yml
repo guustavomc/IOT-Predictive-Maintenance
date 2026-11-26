@@ -1,0 +1,6 @@
+# Ativa o bridge para o ESP32 no Wokwi (máquina M-06). Use junto com o compose principal:
+#   docker compose -f docker-compose.yml -f docker-compose.wokwi.yml up --build
+services:
+  mosquitto:
+    volumes:
+      - ./mosquitto/mosquitto-wokwi.conf:/mosquitto/config/mosquitto.conf:ro
