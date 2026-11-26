@@ -84,7 +84,7 @@
     <li><span>2. Arquitetura e Metodologia</span></li>
     <li class="sub"><span>2.1 Diagrama da arquitetura · 2.2 Tecnologias · 2.3 Metodologia de desenvolvimento</span></li>
     <li><span>3. Desenvolvimento e Funcionalidades</span></li>
-    <li class="sub"><span>3.1 Contrato MQTT · 3.2 Dispositivos · 3.3 Modelo de IA · 3.4 Inferência em fluxo · 3.5 Painel · 3.6 ESP32</span></li>
+    <li class="sub"><span>3.1 Contrato de comunicação · 3.2 Dispositivos · 3.3 Modelo de IA · 3.4 Inferência em fluxo · 3.5 Painel</span></li>
     <li><span>4. Análise de Resultados</span></li>
     <li class="sub"><span>4.1 Desempenho do modelo · 4.2 Insights da IA · 4.3 Validação em operação · 4.4 Escalabilidade e resiliência</span></li>
     <li><span>5. Conclusões e Lições Aprendidas</span></li>
@@ -257,77 +257,47 @@
 <section>
   <h2 style="margin-top:22px">3. Desenvolvimento e Funcionalidades</h2>
 
-  <h3>3.1 Contrato de comunicação (MQTT + JSON Schema)</h3>
-  <p>Todos os tópicos seguem o padrão <code>fabrica/maquinas/&lt;id&gt;/&lt;tipo&gt;</code>. O <code>&lt;id&gt;</code> do tópico precisa coincidir com o campo <code>maquina_id</code> da mensagem, e toda mensagem é validada pelo schema correspondente.</p>
+  <h3>3.1 Contrato de comunicação</h3>
+  <p>Os tópicos seguem o padrão <code>fabrica/maquinas/&lt;id&gt;/&lt;tipo&gt;</code> e toda mensagem é validada contra um JSON Schema; o que estiver fora do contrato é descartado. A telemetria usa QoS 0 (perder uma leitura entre centenas não faz diferença); o restante usa QoS 1, porque precisa chegar.</p>
   <table>
     <tr><th>Tópico</th><th>Direção</th><th>QoS</th><th>Conteúdo</th></tr>
     <tr><td><code>…/&lt;id&gt;/telemetria</code></td><td>máquina → plataforma</td><td>0</td><td>leitura dos 5 sensores + tipo de produto</td></tr>
-    <tr><td><code>…/&lt;id&gt;/evento</code></td><td>máquina → plataforma</td><td>1</td><td><code>falha</code> (com o modo) ou <code>manutencao</code> (preventiva/corretiva)</td></tr>
-    <tr><td><code>…/&lt;id&gt;/status</code></td><td>máquina ou broker → plataforma</td><td>1, retido</td><td><code>online</code> / <code>offline</code> (desligamento ou conexão perdida)</td></tr>
+    <tr><td><code>…/&lt;id&gt;/evento</code></td><td>máquina → plataforma</td><td>1</td><td><code>falha</code> (com o modo) ou <code>manutencao</code></td></tr>
+    <tr><td><code>…/&lt;id&gt;/status</code></td><td>máquina ou broker → plataforma</td><td>1, retido</td><td><code>online</code> / <code>offline</code></td></tr>
     <tr><td><code>…/&lt;id&gt;/comando</code></td><td>plataforma → máquina</td><td>1</td><td><code>{"acao": "manutencao"}</code></td></tr>
     <tr><td><code>fabrica/alertas</code></td><td>plataforma → assinantes</td><td>1</td><td>risco, tipo de falha e mensagem</td></tr>
   </table>
-  <p>A telemetria usa QoS 0 porque perder uma leitura entre centenas não altera o resultado e economiza banda; eventos, status, comandos e alertas usam QoS 1 porque precisam chegar. Exemplo de telemetria:</p>
-  <pre>{"maquina_id": "M-03", "ts": 1764000000.12, "tipo": "L", "temp_ar_k": 300.4, "temp_processo_k": 310.5,
- "rotacao_rpm": 1302.7, "torque_nm": 55.21, "desgaste_min": 160.0}</pre>
 
-  <h3>3.2 Dispositivos simulados</h3>
-  <p>Como não havia uma fábrica disponível, o projeto <code>dispositivos/simulador/</code> faz o papel do hardware. Ele tem duas partes:</p>
-  <ul>
-    <li><b><code>simulador.py</code> (o firmware):</b> conecta ao broker com reconexão automática, registra o <i>Last Will</i>, publica uma leitura a cada 0,5 s, assina somente os comandos da própria máquina e executa a manutenção quando recebe a ordem. Em desligamento normal (SIGTERM), publica <code>offline/desligamento</code> antes de sair.</li>
-    <li><b><code>maquina.py</code> (a física):</b> reproduz o processo documentado do AI4I 2020. As máquinas saudáveis mantêm torque em torno de 40 N·m e trocam a ferramenta por rotina aos 100 min. A máquina em degradação (M-03) tem o torque aumentando 0,15 N·m por leitura e não troca a ferramenta, até que o produto desgaste × torque ultrapasse o limite (11.000 min·N·m para o tipo L) e ocorra uma <b>falha por sobrecarga (OSF)</b>. A máquina então para, publica o evento de falha e volta após uma manutenção corretiva.</li>
-  </ul>
-  <p>Essa física fica <b>apenas</b> do lado do dispositivo. A IA nunca vê essas regras: aprende os padrões a partir dos dados históricos e recebe só a telemetria. Cada máquina roda em seu próprio contêiner com a mesma imagem e variáveis de ambiente diferentes (<code>MAQUINA_ID</code>, <code>TIPO_PRODUTO</code>, <code>DEGRADANDO</code>), de modo que uma pode cair sem afetar as outras.</p>
+  <h3>3.2 Dispositivos</h3>
+  <p>O projeto <code>dispositivos/simulador/</code> faz o papel do hardware, com um contêiner por máquina. O <b>firmware</b> (<code>simulador.py</code>) publica uma leitura a cada 0,5 s, assina só os comandos da própria máquina e registra um <i>Last Will</i>: se a máquina cair sem aviso, o próprio broker publica <code>offline</code> em nome dela. A <b>física</b> (<code>maquina.py</code>) segue o processo documentado do AI4I 2020: máquinas saudáveis trocam a ferramenta por rotina, enquanto uma máquina configurada para degradar tem o torque subindo aos poucos até o produto desgaste × torque passar do limite e ocorrer uma falha por sobrecarga (OSF). Essas regras ficam só no dispositivo; a IA recebe apenas a telemetria.</p>
+  <p>Para mostrar que o simulador pode ser trocado por hardware, há também um <b>ESP32</b> no simulador Wokwi (máquina M-06), com DHT22, termistor, potenciômetros e LEDs. Ele segue o mesmo contrato e chega à plataforma por um bridge do Mosquitto, sem nenhuma mudança no código da plataforma.</p>
 
   <h3>3.3 Modelo de IA</h3>
-  <p><b>Dados.</b> O dataset AI4I 2020 tem 10.000 registros de uma fresadora, com tipo de produto (L/M/H), as cinco grandezas medidas e o rótulo de falha, que ocorre em 3,39% dos casos. As falhas se dividem em cinco modos:</p>
+  <p>O treino usa o dataset <b>AI4I 2020</b>: 10.000 registros de uma fresadora, com 3,39% de falhas divididas em cinco modos.</p>
   <table>
     <tr><th>Modo</th><th>Significado</th><th>Condição física documentada</th><th class="num">Ocorrências</th></tr>
-    <tr><td>TWF</td><td>Desgaste da ferramenta</td><td>ferramenta troca/falha em ponto aleatório entre 200 e 240 min</td><td class="num">46</td></tr>
+    <tr><td>TWF</td><td>Desgaste da ferramenta</td><td>falha em ponto aleatório entre 200 e 240 min</td><td class="num">46</td></tr>
     <tr><td>HDF</td><td>Dissipação de calor</td><td>Δtemperatura &lt; 8,6 K e rotação &lt; 1380 rpm</td><td class="num">115</td></tr>
     <tr><td>PWF</td><td>Potência</td><td>potência &lt; 3500 W ou &gt; 9000 W</td><td class="num">95</td></tr>
     <tr><td>OSF</td><td>Sobrecarga</td><td>desgaste × torque &gt; 11.000 / 12.000 / 13.000 (L/M/H)</td><td class="num">98</td></tr>
     <tr><td>RNF</td><td>Aleatória</td><td>0,1% de chance, independente dos sensores</td><td class="num">19</td></tr>
   </table>
-  <p><b>Engenharia de atributos.</b> Além dos cinco sensores e do tipo de produto codificado, o modelo recebe três grandezas físicas derivadas, calculadas pela mesma função no treino e na inferência (<code>plataforma/comum/features.py</code>): <code>delta_temp_k</code> (temperatura do processo − temperatura do ar), <code>potencia_w</code> (torque × velocidade angular) e <code>desgaste_x_torque</code> (esforço acumulado sobre a ferramenta).</p>
-  <p><b>Modelos.</b> Foram treinados dois classificadores <b>Random Forest</b>:</p>
-  <ol>
-    <li><b><code>modelo_falha</code></b> (200 árvores, <code>min_samples_leaf=3</code>, <code>class_weight="balanced_subsample"</code>): estima a probabilidade de falha. O balanceamento de classes compensa a raridade das falhas (cerca de 1 em 30 registros).</li>
-    <li><b><code>modelo_tipo</code></b> (100 árvores): treinado só com os registros de falha, indica o modo mais provável. Vira a "causa provável" do alerta.</li>
-  </ol>
-  <p>O Random Forest foi escolhido por lidar bem com relações não lineares e limiares (as falhas do AI4I são justamente combinações de limites físicos), não exigir normalização, ser robusto a ruído e fornecer a importância de cada atributo, o que ajuda a explicar o modelo.</p>
+  <p>Além dos cinco sensores e do tipo de produto, o modelo recebe três atributos físicos derivados: <code>delta_temp_k</code>, <code>potencia_w</code> e <code>desgaste_x_torque</code>. São treinados dois <b>Random Forest</b>: o <code>modelo_falha</code> (200 árvores, com <code>class_weight="balanced_subsample"</code> para compensar a raridade das falhas) estima a probabilidade de falha, e o <code>modelo_tipo</code>, treinado só com as falhas, indica a causa provável. O Random Forest foi escolhido porque as falhas do AI4I são combinações de limiares físicos, que árvores capturam bem, e porque ele informa a importância de cada atributo.</p>
 
-  <h3>3.4 Inferência em fluxo: como o alerta sai <i>antes</i> da falha</h3>
-  <p>Um classificador que olha só a leitura atual reconhece a falha quando ela já está acontecendo, o que não é preditivo. Por isso o serviço de inferência (<code>plataforma/inferencia/servico.py</code>) trata o fluxo como <b>série temporal</b>:</p>
-  <ol>
-    <li>guarda uma <b>janela deslizante</b> com as últimas 60 leituras de cada máquina;</li>
-    <li>ajusta uma <b>regressão linear</b> em cada sensor e <b>projeta</b> o estado da máquina 50 leituras à frente, limitado à faixa física válida de cada sensor;</li>
-    <li>o modelo avalia o estado <b>atual</b> e o <b>projetado</b>; o risco é o maior dos dois, suavizado por média móvel de 3 leituras para evitar alarme por ruído;</li>
-    <li>se o risco ≥ 0,5, o serviço consulta o <code>modelo_tipo</code> e publica um alerta. O alerta fica aberto, como uma ordem de serviço, até que uma manutenção ou falha seja registrada; depois disso a janela da máquina é reiniciada.</li>
-  </ol>
-  <p><b>Micro-lotes.</b> O callback MQTT apenas enfileira as mensagens. A cada 0,5 s, o laço principal processa tudo o que chegou de uma vez: uma única predição vetorizada do modelo e uma única transação no banco por lote, o mesmo padrão <i>micro-batch</i> do Spark Streaming. Mensagens que falham na validação são descartadas com log, e um erro em um lote não derruba o serviço. Se o relógio de um dispositivo estiver mais de 60 s fora do horário (por exemplo, um ESP32 sem NTP), o serviço usa o horário de recebimento.</p>
+  <h3>3.4 Inferência em fluxo</h3>
+  <p>Classificar só a leitura atual reconhece a falha quando ela já está acontecendo. Para alertar <b>antes</b>, o serviço de inferência mantém uma <b>janela deslizante</b> das últimas 60 leituras de cada máquina, ajusta uma regressão linear em cada sensor e <b>projeta</b> o estado da máquina 50 leituras à frente. O modelo avalia o estado atual e o projetado; o risco é o maior dos dois, suavizado por média móvel. Se passar de 0,5, sai um alerta com a causa provável, que fica aberto até a manutenção ou a falha.</p>
+  <p>As mensagens são processadas em <b>micro-lotes</b> de 0,5 s: uma única predição vetorizada e uma única transação no banco por lote, o mesmo padrão do Spark Streaming.</p>
 
-  <h3>3.5 Painel de monitoramento</h3>
-  <p>O painel Streamlit (<code>plataforma/painel/app.py</code>) atualiza a cada 2 s e oferece:</p>
-  <ul>
-    <li><b>cartão por máquina</b> com o risco atual e o status: 🟢 normal, 🟡 atenção (≥ 30%), 🔴 alerta (≥ 50%), ⛔ parada por falha, ⚪ sem sinal, 🔌 offline (com o motivo: desligada ou conexão perdida via Last Will);</li>
-    <li><b>botão 🔧 Manutenção</b> em cada máquina, que publica o comando MQTT para aquela máquina;</li>
-    <li>gráfico do <b>risco previsto pela IA</b> de todas as máquinas, com a linha de limiar;</li>
-    <li>gráficos dos sensores da máquina selecionada (torque, desgaste, rotação e desgaste × torque);</li>
-    <li>tabelas de <b>alertas</b> e de <b>eventos</b> (falhas e manutenções);</li>
-    <li>a seção <b>"Validação: a IA avisou antes da falha?"</b>, que cruza cada falha real com os alertas do mesmo ciclo e mostra a antecedência, além do contador de falhas evitadas por manutenção preventiva.</li>
-  </ul>
-
-  <h3>3.6 Hardware real: ESP32 no Wokwi (máquina M-06)</h3>
-  <p>Para demonstrar que o simulador pode ser trocado por hardware sem alterar a plataforma, foi desenvolvido um firmware para ESP32 (<code>dispositivos/esp32-wokwi/</code>) com DHT22 (temperatura do ar), termistor NTC (temperatura do processo), dois potenciômetros (torque e rotação), um botão de troca de ferramenta e LEDs de conexão e de alerta. Como o Wokwi roda no navegador e só alcança a internet, o ESP32 publica em um broker público com um prefixo próprio, e um <b>bridge do Mosquitto</b> espelha somente os tópicos da M-06 nos dois sentidos. Assim, o ESP32 aparece no painel como mais uma máquina, recebe ordens de manutenção e acende o LED vermelho quando a IA publica um alerta para ele.</p>
+  <h3>3.5 Painel</h3>
+  <p>O painel Streamlit atualiza a cada 2 s e mostra, para cada máquina, o risco e o status (normal, atenção, alerta, parada, sem sinal ou offline), com um botão <b>🔧 Manutenção</b> que envia o comando MQTT para ela. Traz ainda o gráfico de risco de todas as máquinas, os sensores da máquina selecionada, as tabelas de alertas e eventos e a seção <b>"Validação: a IA avisou antes da falha?"</b>, que mede a antecedência de cada alerta (Figura 3).</p>
 </section>
 
 <!-- ============================ 4. RESULTADOS ============================ -->
 <section>
   <h2 style="margin-top:22px">4. Análise de Resultados</h2>
 
-  <h3>4.1 Desempenho do modelo no dataset real</h3>
-  <p>Avaliação no conjunto de teste estratificado (20% = 2.000 registros, 68 falhas), com limiar de 0,5:</p>
+  <h3>4.1 Desempenho do modelo</h3>
+  <p>Avaliação no conjunto de teste estratificado (2.000 registros, 68 falhas), com limiar de 0,5:</p>
   <div class="kpis">
     <div class="kpi"><b>0,972</b><span>ROC AUC</span></div>
     <div class="kpi"><b>0,90</b><span>Precisão (falha)</span></div>
@@ -342,29 +312,25 @@
         <tr><th>Real normal</th><td class="vn">1926<br><small>VN</small></td><td class="fp">6<br><small>FP</small></td></tr>
         <tr><th>Real falha</th><td class="fn">12<br><small>FN</small></td><td class="vp">56<br><small>VP</small></td></tr>
       </table>
-      <p style="font-size:9pt;text-align:center"><i>Tabela – Matriz de confusão no conjunto de teste.</i></p>
     </div>
     <div>
-      <p>A acurácia de 99,1% não é a métrica relevante: um modelo que sempre dissesse "normal" teria 96,6%. O que importa é a classe falha. O modelo encontra 56 das 68 falhas (recall de 0,82) e, quando alerta, acerta em 90% das vezes, com apenas 6 alarmes falsos em 1.932 leituras normais (0,3%).</p>
+      <p>A acurácia não é a métrica relevante: dizer sempre "normal" já daria 96,6%. Na classe falha, o modelo encontra 56 das 68 falhas e gera só 6 alarmes falsos em 1.932 leituras normais.</p>
     </div>
   </div>
 
-  <h3>4.2 Insights gerados pela IA</h3>
-  <p><b>De onde vêm os erros.</b> Separando o recall por modo de falha, fica claro que o modelo acerta praticamente todas as falhas que têm causa física e que os erros se concentram nas falhas que, pela própria construção do dataset, são aleatórias:</p>
+  <h3>4.2 Insights da IA</h3>
   <table>
-    <tr><th>Modo de falha</th><th class="num">Detectadas / total no teste</th><th>Interpretação</th></tr>
-    <tr><td>OSF – sobrecarga</td><td class="num"><b>16 / 16</b></td><td>causa física: desgaste × torque</td></tr>
-    <tr><td>PWF – potência</td><td class="num"><b>13 / 13</b></td><td>causa física: torque × rotação</td></tr>
-    <tr><td>HDF – calor</td><td class="num"><b>28 / 29</b></td><td>causa física: Δtemperatura e rotação</td></tr>
-    <tr><td>TWF – desgaste da ferramenta</td><td class="num">1 / 10</td><td>a ferramenta falha num ponto <b>aleatório</b> entre 200 e 240 min</td></tr>
-    <tr><td>Sem modo informado</td><td class="num">0 / 2</td><td>ruído de rótulo do dataset original</td></tr>
+    <tr><th>Modo de falha</th><th class="num">Detectadas no teste</th><th>Interpretação</th></tr>
+    <tr><td>OSF – sobrecarga</td><td class="num"><b>16 / 16</b></td><td>causa física</td></tr>
+    <tr><td>PWF – potência</td><td class="num"><b>13 / 13</b></td><td>causa física</td></tr>
+    <tr><td>HDF – calor</td><td class="num"><b>28 / 29</b></td><td>causa física</td></tr>
+    <tr><td>TWF – desgaste da ferramenta</td><td class="num">1 / 10</td><td>falha em ponto <b>aleatório</b> entre 200 e 240 min</td></tr>
+    <tr><td>Sem modo informado</td><td class="num">0 / 2</td><td>ruído de rótulo do dataset</td></tr>
   </table>
-  <p style="font-size:9pt">Uma mesma falha pode ter mais de um modo marcado, por isso a soma das linhas é maior que o total de 68.</p>
-  <div class="destaque"><p><b>Insight:</b> das 12 falhas não detectadas, 11 vêm de eventos que não são previsíveis a partir dos sensores (9 falhas de ferramenta em ponto aleatório e 2 rótulos sem modo). A única falha física perdida foi uma HDF com probabilidade de 0,46, logo abaixo do limiar. Considerando as falhas com causa física (HDF, PWF ou OSF), o recall é de <b>56/57 (98%)</b>. Na prática, isso sugere que a falha de ferramenta deveria ser tratada por uma regra de troca preventiva antes de 200 min, e não pela IA, que é exatamente o que fazem as máquinas saudáveis do simulador.</p></div>
+  <div class="destaque"><p><b>Insight:</b> nas falhas com causa física (HDF, PWF ou OSF), o recall é de <b>56/57 (98%)</b>. Dos 12 erros, 11 são falhas aleatórias por construção do dataset, que nenhum modelo preveria pelos sensores. Por isso, a falha de ferramenta deve ser tratada por troca preventiva antes de 200 min, e não pela IA.</p></div>
 
-  <p><b>Atributos mais importantes.</b> A importância de atributos do Random Forest mostra que o modelo "redescobriu" a física do processo: rotação, torque e potência explicam a maior parte das decisões, seguidos do desgaste e do produto desgaste × torque. Os atributos derivados criados na engenharia de features (potência, desgaste × torque e Δtemperatura) somam 38% da importância.</p>
   <figure>
-  <svg viewBox="0 0 640 230" width="88%" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" font-size="11">
+  <svg viewBox="0 0 640 230" width="80%" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" font-size="11">
     <g transform="translate(150,10)">
       <g fill="#1f78b4">
         <rect y="0" height="18" width="424.2"/><rect y="24" height="18" width="377.2"/><rect y="48" height="18" width="369.2" fill="#33a02c"/>
@@ -383,80 +349,54 @@
       </g>
     </g>
   </svg>
-  <figcaption>Figura 2 – Importância dos atributos no modelo de falha. Em verde (*), os atributos derivados criados na engenharia de features.</figcaption>
+  <figcaption>Figura 2 – Importância dos atributos. Em verde (*), os atributos derivados, que somam 38% da importância.</figcaption>
   </figure>
-
-  <p><b>Escolha do limiar.</b> O limiar de alerta define o equilíbrio entre falhas perdidas e alarmes falsos. A varredura no conjunto de teste mostra que 0,5 é um ponto de equilíbrio; um limiar mais baixo pegaria mais falhas ao custo de muito mais alarmes falsos:</p>
+  <p>A importância dos atributos mostra que o modelo "redescobriu" a física do processo: rotação, torque e potência dominam as decisões. Quanto ao limiar, a varredura no teste mostra que 0,5 equilibra falhas perdidas e alarmes falsos:</p>
   <table>
-    <tr><th class="num">Limiar</th><th class="num">Falhas detectadas (VP)</th><th class="num">Falhas perdidas (FN)</th><th class="num">Alarmes falsos (FP)</th></tr>
-    <tr><td class="num">0,2</td><td class="num">61</td><td class="num">7</td><td class="num">45</td></tr>
-    <tr><td class="num">0,3</td><td class="num">59</td><td class="num">9</td><td class="num">20</td></tr>
-    <tr><td class="num">0,4</td><td class="num">58</td><td class="num">10</td><td class="num">9</td></tr>
-    <tr><td class="num"><b>0,5 (adotado)</b></td><td class="num"><b>56</b></td><td class="num"><b>12</b></td><td class="num"><b>6</b></td></tr>
-    <tr><td class="num">0,6</td><td class="num">54</td><td class="num">14</td><td class="num">4</td></tr>
-    <tr><td class="num">0,7</td><td class="num">51</td><td class="num">17</td><td class="num">2</td></tr>
+    <tr><th>Limiar</th><td class="num">0,2</td><td class="num">0,3</td><td class="num">0,4</td><td class="num"><b>0,5</b></td><td class="num">0,6</td><td class="num">0,7</td></tr>
+    <tr><th>Falhas detectadas</th><td class="num">61</td><td class="num">59</td><td class="num">58</td><td class="num"><b>56</b></td><td class="num">54</td><td class="num">51</td></tr>
+    <tr><th>Alarmes falsos</th><td class="num">45</td><td class="num">20</td><td class="num">9</td><td class="num"><b>6</b></td><td class="num">4</td><td class="num">2</td></tr>
   </table>
-  <p>Em uma aplicação real, o limiar ideal depende do custo de cada erro: se uma parada custa muito mais que uma inspeção, vale baixar o limiar. Esse ajuste por custo é um dos próximos passos propostos.</p>
-</section>
 
-<section>
   <h3>4.3 Validação em operação</h3>
-  <p>A validação mais importante é a do sistema funcionando: a IA avisa <b>antes</b> de uma falha que ela nunca viu acontecer, recebendo só a telemetria? Para responder, o sistema completo foi executado com <code>docker compose up</code> (broker, 5 máquinas em contêineres separados, treino, inferência e painel) por <b>11,2 minutos</b>, gerando <b>5.952 leituras</b>. A máquina M-03 foi configurada para degradar até falhar; as outras quatro operaram normalmente. A antecedência é medida pelo próprio painel, cruzando o primeiro alerta de cada ciclo com o evento de falha publicado pela máquina.</p>
+  <p>O sistema completo foi executado com <code>docker compose up</code> por 11,2 minutos (5.952 leituras), com a M-03 configurada para degradar e as outras quatro máquinas saudáveis.</p>
   <div class="kpis">
     <div class="kpi"><b>5 / 5</b><span>falhas reais alertadas antes</span></div>
     <div class="kpi"><b>20,4 s</b><span>antecedência média (16–23 s)</span></div>
     <div class="kpi"><b>6 / 6</b><span>alertas com a causa correta (OSF)</span></div>
     <div class="kpi"><b>0</b><span>alarmes falsos nas máquinas saudáveis</span></div>
   </div>
-  <table>
-    <tr><th style="width:14%">Ciclo (M-03)</th><th>Desfecho</th><th class="num">Risco no alerta</th><th>Causa prevista</th><th class="num" style="width:22%">Antecedência</th></tr>
-    <tr><td>1</td><td>falha real (OSF)</td><td class="num">0,659</td><td>OSF – sobrecarga</td><td class="num">21,3 s · 42 leituras</td></tr>
-    <tr><td>2</td><td>falha real (OSF)</td><td class="num">0,631</td><td>OSF – sobrecarga</td><td class="num">20,1 s · 39 leituras</td></tr>
-    <tr><td>3</td><td>falha real (OSF)</td><td class="num">0,604</td><td>OSF – sobrecarga</td><td class="num">21,1 s · 43 leituras</td></tr>
-    <tr><td>4</td><td>falha real (OSF)</td><td class="num">0,577</td><td>OSF – sobrecarga</td><td class="num">23,1 s · 47 leituras</td></tr>
-    <tr><td>5</td><td>falha real (OSF)</td><td class="num">0,598</td><td>OSF – sobrecarga</td><td class="num">16,2 s · 33 leituras</td></tr>
-    <tr><td>6</td><td><b>falha evitada</b>: ordem de manutenção enviada após o alerta</td><td class="num">0,674</td><td>OSF – sobrecarga</td><td class="num">—</td></tr>
-  </table>
-  <p>Nos cinco ciclos em que nada foi feito, a máquina falhou e a IA havia alertado de 16 a 23 segundos antes (33 a 47 leituras, no ritmo de uma leitura a cada 0,5 s), sempre apontando a causa correta. No sexto ciclo, a ordem de manutenção foi enviada logo após o alerta: o comando chegou à M-03 pelo MQTT, a ferramenta foi trocada, a máquina publicou o evento <code>manutencao/preventiva</code> e a falha não aconteceu. Durante a execução também houve uma manutenção acionada manualmente pelo painel antes de qualquer alerta, que igualmente reiniciou o ciclo; o painel contabiliza as duas como manutenções preventivas.</p>
-  <p>Nas quatro máquinas saudáveis, o risco máximo registrado foi de 1,9% (M-01), 2,5% (M-02), 6,3% (M-05) e 12,4% (M-04); nenhuma leitura chegou ao nível de atenção (30%) e nenhum alerta falso foi emitido. Em uma execução anterior com três ciclos de degradação, o resultado foi equivalente: todas as falhas alertadas com 22 a 51 leituras de antecedência e nenhuma máquina saudável acima de 7,2% de risco.</p>
-  <p>A antecedência em segundos é curta porque a simulação é acelerada: o desgaste que numa máquina real levaria horas acontece em cerca de um minuto. O que importa é a antecedência relativa ao ciclo de degradação; em uma máquina real, com o mesmo horizonte de projeção em número de leituras e uma taxa de amostragem menor, ela seria proporcionalmente maior.</p>
+  <p>Todas as cinco falhas da M-03 foram alertadas de 33 a 47 leituras antes, sempre com a causa correta. Num sexto ciclo, a ordem de manutenção foi enviada logo após o alerta e a falha foi <b>evitada</b>. Nas máquinas saudáveis, o risco máximo foi de 12,4%, sem nenhum alerta. A antecedência em segundos é curta porque a simulação é acelerada: numa máquina real, com amostragem mais espaçada, ela seria proporcionalmente maior.</p>
   <figure>
     <img src="img/painel.png" alt="Painel de monitoramento">
-    <figcaption>Figura 3 – Painel durante a execução. No gráfico, os picos de risco da M-03 cruzam o limiar de 50% antes de cada falha; o terceiro pico cai abruptamente porque a ordem de manutenção foi enviada. A M-02 aparece como "OFFLINE: conexão perdida (Last Will)" após o contêiner ser derrubado com <code>docker compose kill</code>. Abaixo, alertas, eventos e a tabela de validação com a antecedência de cada falha.</figcaption>
+    <figcaption>Figura 3 – Painel durante a execução. Os picos de risco da M-03 cruzam o limiar antes de cada falha; o terceiro cai porque a manutenção foi enviada. A M-02 aparece "OFFLINE (Last Will)" após o contêiner ser derrubado.</figcaption>
   </figure>
 
   <h3>4.4 Escalabilidade e resiliência</h3>
-  <p><b>Carga.</b> Na primeira versão, o serviço de inferência processava mensagem por mensagem e começava a acumular atraso com cerca de 30 mensagens por segundo. Com o processamento em micro-lotes, um teste de carga com <b>20 máquinas publicando a cada 0,1 s (≈200 mensagens/s)</b> processou <b>17.413 leituras em 90 s</b>, com atraso em torno de 1 s e 5 de 5 falhas alertadas a tempo. O ganho vem de trocar milhares de chamadas ao modelo e de transações no banco por uma chamada e uma transação a cada 0,5 s.</p>
-  <p><b>Resiliência.</b> Como cada máquina é um contêiner com conexão MQTT própria, derrubar uma delas não afeta as demais. O status de conexão usa o <i>Last Will</i> do MQTT: em um desligamento normal (<code>docker compose stop</code>) a própria máquina avisa que está saindo; em uma queda abrupta (<code>docker compose kill</code>, falta de energia ou de rede), <b>o broker</b> publica <code>offline/conexao_perdida</code> em nome dela. As mensagens de status são retidas, então a plataforma conhece o estado de todas as máquinas mesmo se reiniciar depois delas. No teste da Figura 3, o contêiner da M-02 foi derrubado com <code>docker compose kill</code>: o broker publicou <code>offline/conexao_perdida</code>, o painel marcou só a M-02 como offline e desabilitou seu botão de manutenção, e as demais máquinas seguiram operando normalmente. Com <code>docker compose start</code>, a M-02 voltou e publicou <code>online</code>. A plataforma também descarta mensagens fora do contrato, protegendo o modelo de dados malformados.</p>
+  <p>Com os micro-lotes, um teste de carga com <b>20 máquinas a cada 0,1 s (≈200 mensagens/s)</b> processou 17.413 leituras em 90 s, com atraso em torno de 1 s; a versão anterior, mensagem por mensagem, acumulava atraso já com ~30 mensagens/s. Na resiliência, derrubar o contêiner da M-02 com <code>docker compose kill</code> fez o broker publicar o <i>Last Will</i>: o painel marcou só a M-02 como offline e as demais seguiram normalmente (Figura 3).</p>
 </section>
 
 <!-- ============================ 5. CONCLUSÕES ============================ -->
 <section>
   <h2 style="margin-top:22px">5. Conclusões e Lições Aprendidas</h2>
 
-  <h3>5.1 Conclusões</h3>
-  <p>O projeto entregou uma solução funcional de manutenção preditiva que demonstra a sinergia entre IoT, Big Data e IA. Os dispositivos publicam telemetria por MQTT sob um contrato validado; a plataforma processa o fluxo de várias máquinas em tempo real e guarda o histórico; e o modelo treinado com dados reais estima o risco e a causa da falha. A projeção de tendência fez a diferença entre um sistema que <i>reconhece</i> falhas e um sistema que as <i>antecipa</i>: as falhas da máquina em degradação foram alertadas antes de acontecer, sem alarmes falsos nas máquinas saudáveis, e o ciclo foi fechado com a ordem de manutenção enviada pelo painel até a máquina, evitando a falha.</p>
-  <p>Do ponto de vista de IA, o modelo alcançou ROC AUC de 0,972 e recall de 98% nas falhas com causa física. A análise por modo mostrou que os erros restantes são falhas aleatórias por construção, o que é um resultado útil por si só: indica o que deve ser tratado por IA e o que deve continuar sendo tratado por regras de manutenção preventiva.</p>
+  <p>O projeto entregou uma solução funcional de manutenção preditiva que une IoT (dispositivos e comandos via MQTT), Big Data (fluxo contínuo em micro-lotes e série temporal) e IA (Random Forest treinado com dados reais). O modelo alcançou ROC AUC de 0,972 e recall de 98% nas falhas com causa física, e, em operação, alertou todas as falhas antes que acontecessem, sem alarmes falsos, fechando o ciclo com a ordem de manutenção que evitou uma falha.</p>
 
-  <h3>5.2 Lições aprendidas</h3>
+  <h3>5.1 Lições aprendidas</h3>
   <ul>
-    <li><b>Acurácia engana em problemas desbalanceados.</b> Com 3,4% de falhas, 96,6% de acurácia é trivial. Recall, precisão, F1 e ROC AUC da classe falha, além do balanceamento de classes no treino, foram essenciais.</li>
-    <li><b>Classificar a leitura atual não é prever.</b> O primeiro modelo só alertava no momento da falha. Tratar os dados como série temporal (janela deslizante + projeção da tendência) foi o que tornou o sistema preditivo.</li>
-    <li><b>Engenharia de atributos com base no domínio vale muito.</b> Grandezas físicas simples (potência, Δtemperatura, desgaste × torque) somaram 38% da importância do modelo.</li>
-    <li><b>O contrato é o que permite trocar o hardware.</b> Separar dispositivos e plataforma e validar cada mensagem por JSON Schema permitiu incluir o ESP32 sem mudar uma linha da plataforma.</li>
-    <li><b>Processar em lotes é o que escala.</b> Tratar mensagem por mensagem acumulava atraso com ~30 msg/s; micro-lotes suportaram ~200 msg/s.</li>
-    <li><b>Separar o "mundo real" da IA evita resultados ilusórios.</b> Manter as regras físicas só no simulador garante que o modelo aprende com dados, e não com as regras que geram a falha.</li>
-    <li><b>Detalhes de IoT importam:</b> QoS diferente por tipo de mensagem, Last Will com mensagens retidas e tratamento de relógio dessincronizado no dispositivo são o que separa uma demonstração de um sistema confiável.</li>
+    <li><b>Acurácia engana com classes desbalanceadas:</b> com 3,4% de falhas, recall, precisão e ROC AUC é que mostram a qualidade do modelo.</li>
+    <li><b>Classificar a leitura atual não é prever:</b> a projeção de tendência sobre a janela deslizante foi o que tornou o sistema preditivo.</li>
+    <li><b>Conhecimento do domínio ajuda a IA:</b> atributos físicos simples somaram 38% da importância do modelo.</li>
+    <li><b>O contrato permite trocar o hardware:</b> o ESP32 entrou sem mudar uma linha da plataforma.</li>
+    <li><b>Processar em lotes é o que escala:</b> de ~30 para ~200 mensagens/s sem acumular atraso.</li>
   </ul>
 
-  <h3>5.3 Limitações e próximos passos</h3>
+  <h3>5.2 Próximos passos</h3>
   <ul>
-    <li><b>Dados de operação simulados:</b> o modelo foi treinado com dados reais, mas a telemetria ao vivo vem de um simulador. O próximo passo é gravar o firmware em um ESP32 físico ligado a uma máquina real.</li>
-    <li><b>Explicabilidade (XAI):</b> usar SHAP para mostrar, em cada alerta, quais sensores mais contribuíram para o risco.</li>
-    <li><b>Banco de séries temporais:</b> trocar o SQLite por InfluxDB ou TimescaleDB (a troca está isolada em um módulo) e usar Grafana.</li>
-    <li><b>Limiar por custo:</b> escolher o limiar que minimiza custo de parada × falhas perdidas + custo de manutenção × alarmes falsos.</li>
-    <li><b>Vida útil remanescente (RUL):</b> estimar quanto tempo falta até a falha com modelos de séries temporais (por exemplo, com o dataset NASA C-MAPSS).</li>
-    <li><b>Segurança:</b> autenticação e TLS no broker MQTT, que hoje aceita conexões anônimas, e broker próprio no lugar do broker público usado pelo ESP32.</li>
+    <li>Gravar o firmware em um ESP32 físico ligado a uma máquina real.</li>
+    <li>Explicar cada alerta com SHAP e escolher o limiar pelo custo de cada tipo de erro.</li>
+    <li>Trocar o SQLite por um banco de séries temporais (InfluxDB/TimescaleDB) com Grafana.</li>
+    <li>Estimar a vida útil remanescente (RUL) e adicionar autenticação e TLS ao broker MQTT.</li>
   </ul>
 
   <h2 style="margin-top:22px">Referências</h2>
