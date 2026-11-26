@@ -6,6 +6,7 @@ MQTT. A comunicação com a plataforma segue SOMENTE o contrato em contrato/:
 
   fabrica/maquinas/<id>/telemetria   publica a leitura dos sensores
   fabrica/maquinas/<id>/evento       publica falha real / manutenção realizada
+  fabrica/maquinas/<id>/status       online/offline (retido; offline via Last Will)
   fabrica/maquinas/<id>/comando      assina as ordens enviadas para ESTA máquina
 
 Este projeto é independente da plataforma (não importa nada dela): poderia
@@ -17,6 +18,7 @@ import json
 import os
 import queue
 import re
+import signal
 import time
 
 import numpy as np
@@ -57,9 +59,17 @@ def validar_configuracao():
         raise SystemExit(f"TIPO_PRODUTO inválido: {TIPO_PRODUTO!r} (use L, M ou H)")
 
 
+def payload_status(status: str, motivo: str = "") -> str:
+    return json.dumps({"maquina_id": MAQUINA_ID, "ts": time.time(), "status": status, "motivo": motivo})
+
+
 def conectar() -> mqtt.Client:
     """Conecta ao broker, tentando de novo até conseguir (como um dispositivo faria)."""
     cliente = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"maquina-{MAQUINA_ID}")
+    # Last Will ("testamento"): se a conexão cair sem aviso (energia, rede, travamento),
+    # o BROKER publica esta mensagem em nome do dispositivo. Retida, para quem
+    # assinar depois saber na hora que a máquina está fora do ar.
+    cliente.will_set(topico("status"), payload_status("offline", "conexao_perdida"), qos=1, retain=True)
     while True:
         try:
             cliente.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
@@ -92,10 +102,24 @@ def main():
 
     def ao_conectar(cli, _userdata, _flags, _reason_code, _properties):
         cli.subscribe(topico("comando"), qos=1)  # só as ordens desta máquina
+        cli.publish(topico("status"), payload_status("online"), qos=1, retain=True)
 
     cliente.on_connect = ao_conectar
     cliente.on_message = ao_receber_comando
     cliente.loop_start()  # rede MQTT em thread separada
+
+    def desligar(_sinal, _frame):
+        # Desligamento normal (ex.: docker compose stop): avisa offline por conta
+        # própria e desconecta limpo. Nesse caso o broker NÃO usa o Last Will.
+        log("desligando")
+        cliente.publish(topico("status"), payload_status("offline", "desligamento"),
+                        qos=1, retain=True).wait_for_publish(timeout=2)
+        cliente.disconnect()
+        cliente.loop_stop()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, desligar)
+    signal.signal(signal.SIGINT, desligar)
 
     log(f"em operação (tipo {TIPO_PRODUTO}{', DEGRADANDO' if DEGRADANDO else ''})")
     while True:

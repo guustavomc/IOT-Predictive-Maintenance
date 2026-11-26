@@ -35,11 +35,14 @@ def carregar(janela_min: int):
         leituras = pd.read_sql_query("SELECT * FROM leituras WHERE ts >= ? ORDER BY ts", con, params=(desde,))
         alertas = pd.read_sql_query("SELECT * FROM alertas ORDER BY ts", con)
         eventos = pd.read_sql_query("SELECT * FROM eventos ORDER BY ts", con)
+        conexoes = pd.read_sql_query("SELECT * FROM conexoes ORDER BY ts", con)
     finally:
         con.close()
     for df in (leituras, alertas, eventos):
         df["hora"] = para_hora(df["ts"])
-    return leituras, alertas, eventos
+    # último status de conexão de cada máquina (online/offline)
+    ultimo_status = conexoes.groupby("maquina_id").tail(1).set_index("maquina_id")
+    return leituras, alertas, eventos, ultimo_status
 
 
 def antecedencia_alertas(alertas: pd.DataFrame, eventos: pd.DataFrame) -> pd.DataFrame:
@@ -69,7 +72,7 @@ def enviar_manutencao(maquina_id: str):
 
 @st.fragment(run_every=2)
 def ao_vivo():
-    leituras, alertas, eventos = carregar(janela_min)
+    leituras, alertas, eventos, ultimo_status = carregar(janela_min)
     if leituras.empty:
         st.info("Aguardando telemetria... (as máquinas e o serviço de inferência estão rodando?)")
         return
@@ -86,11 +89,18 @@ def ao_vivo():
     for col, (mid, ult) in zip(colunas, ultimas.iterrows()):
         p = ult["risco"]
         silencio_s = agora - ult["ts"]
-        sem_sinal = mid not in paradas and silencio_s > config.SEM_SINAL_S
-        if mid in paradas:
+        conexao = ultimo_status.loc[mid] if mid in ultimo_status.index else None
+        offline = conexao is not None and conexao["status"] == "offline"
+        sem_sinal = offline or (mid not in paradas and silencio_s > config.SEM_SINAL_S)
+        if offline:
+            # o broker (Last Will) ou o próprio dispositivo avisou que caiu
+            motivo = {"conexao_perdida": "conexão perdida (Last Will)",
+                      "desligamento": "desligada"}.get(conexao["motivo"], conexao["motivo"])
+            status = f"🔌 OFFLINE: {motivo}, há {agora - conexao['ts']:.0f} s"
+        elif mid in paradas:
             status = "⛔ PARADA (falha)"
         elif sem_sinal:
-            # parou de mandar telemetria sem registrar falha: dispositivo/rede fora do ar
+            # conectado, mas sem mandar telemetria (ex.: sensor travado)
             status = f"⚪ Sem sinal há {silencio_s:.0f} s"
         elif p >= config.LIMIAR_ALERTA:
             status = "🔴 ALERTA"
@@ -101,7 +111,7 @@ def ao_vivo():
         with col:
             st.metric(f"{mid} (tipo {ult['tipo']})", f"{p:.0%}", help="Probabilidade de falha (média móvel)")
             st.caption(status)
-            if st.button("🔧 Manutenção", key=f"man_{mid}", disabled=mid in paradas or sem_sinal):
+            if st.button("🔧 Manutenção", key=f"man_{mid}", disabled=mid in paradas or sem_sinal or offline):
                 try:
                     enviar_manutencao(mid)
                     st.toast(f"Ordem de manutenção enviada para {mid}")

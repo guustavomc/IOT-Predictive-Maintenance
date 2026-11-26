@@ -33,6 +33,9 @@ LIMIAR_ALERTA = float(os.getenv("LIMIAR_ALERTA", "0.5"))
 JANELA_TENDENCIA = int(os.getenv("JANELA_TENDENCIA", "60"))      # leituras usadas para estimar a tendência
 HORIZONTE_LEITURAS = int(os.getenv("HORIZONTE_LEITURAS", "50"))  # quantas leituras à frente projetar
 JANELA_MEDIA = int(os.getenv("JANELA_MEDIA", "3"))  # média móvel do risco (evita alarme falso por ruído)
+# Se o relógio do dispositivo estiver mais longe que isso do horário da plataforma
+# (ex.: sem NTP), usamos o horário de recebimento no lugar do ts do dispositivo.
+TOLERANCIA_RELOGIO_S = float(os.getenv("TOLERANCIA_RELOGIO_S", "60"))
 
 # --- Painel ---------------------------------------------------------------
 FUSO = os.getenv("FUSO", "America/Sao_Paulo")

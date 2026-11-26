@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS alertas (
 CREATE TABLE IF NOT EXISTS eventos (
     ts REAL, maquina_id TEXT, evento TEXT, detalhe TEXT
 );
+-- status de conexão (online/offline); ts = momento em que a PLATAFORMA recebeu,
+-- porque no Last Will o ts da mensagem é o da conexão, não o da queda
+CREATE TABLE IF NOT EXISTS conexoes (
+    ts REAL, maquina_id TEXT, status TEXT, motivo TEXT
+);
 """
 
 
@@ -54,5 +59,13 @@ def salvar_evento(con, evento: dict):
     con.execute(
         "INSERT INTO eventos VALUES (?,?,?,?)",
         (evento["ts"], evento["maquina_id"], evento["evento"], evento.get("detalhe", "")),
+    )
+    con.commit()
+
+
+def salvar_status(con, status: dict, recebido_em: float):
+    con.execute(
+        "INSERT INTO conexoes VALUES (?,?,?,?)",
+        (recebido_em, status["maquina_id"], status["status"], status.get("motivo", "")),
     )
     con.commit()

@@ -69,7 +69,9 @@ class ServicoInferencia:
         operacoes, linhas_modelo = [], []
         for tipo, dados in mensagens:
             estado = self.estados[dados["maquina_id"]]
-            if tipo == "evento":
+            if tipo == "status":
+                operacoes.append(("status", dados, None))  # não afeta a IA, só o registro
+            elif tipo == "evento":
                 estado.janela.clear()  # após falha ou manutenção o histórico recomeça
                 operacoes.append(("evento", dados, None))
             else:
@@ -86,6 +88,11 @@ class ServicoInferencia:
         leituras_db, alertas = [], []
         for tipo, dados, i in operacoes:
             estado = self.estados[dados["maquina_id"]]
+            if tipo == "status":
+                armazenamento.salvar_status(self.con, dados, dados["_recebido_em"])
+                motivo = f" ({dados['motivo']})" if dados.get("motivo") else ""
+                print(f"Status [{dados['maquina_id']}] {dados['status']}{motivo}")
+                continue
             if tipo == "evento":
                 estado.riscos.clear()
                 estado.em_alerta = False
@@ -129,14 +136,17 @@ def main():
     cliente = mqtt_util.conectar("servico-inferencia")
 
     def ao_conectar(cli, _userdata, _flags, _reason_code, _properties):
-        cli.subscribe([(f"{config.TOPICO_BASE}/+/telemetria", 0), (f"{config.TOPICO_BASE}/+/evento", 1)])
+        # status é retido: ao (re)conectar recebemos na hora o último status de cada máquina
+        cli.subscribe([(f"{config.TOPICO_BASE}/+/telemetria", 0), (f"{config.TOPICO_BASE}/+/evento", 1),
+                       (f"{config.TOPICO_BASE}/+/status", 1)])
 
     descartadas = 0
+    relogios_ruins: set[str] = set()  # máquinas com relógio dessincronizado (para logar uma vez só)
 
     def ao_receber(_cli, _userdata, msg):
         # Não confiamos no que chega da rede: valida contra o contrato (contrato/*.schema.json)
         nonlocal descartadas
-        nome = "telemetria" if msg.topic.endswith("/telemetria") else "evento"
+        nome = msg.topic.rsplit("/", 1)[-1]  # telemetria | evento | status
         try:
             dados = json.loads(msg.payload)
         except ValueError:
@@ -148,7 +158,19 @@ def main():
             descartadas += 1
             print(f"Mensagem fora do contrato descartada ({msg.topic}): {problemas[:3]}")
             return
-        fila.put(("leitura" if nome == "telemetria" else "evento", dados))
+        agora = time.time()
+        if nome == "status":
+            dados["_recebido_em"] = agora
+        elif abs(dados["ts"] - agora) > config.TOLERANCIA_RELOGIO_S:
+            # relógio do dispositivo dessincronizado (ex.: sem NTP): usa o horário de recebimento
+            if dados["maquina_id"] not in relogios_ruins:
+                relogios_ruins.add(dados["maquina_id"])
+                print(f"Relógio de {dados['maquina_id']} fora do horário ({dados['ts'] - agora:+.0f} s): "
+                      "usando o horário de recebimento")
+            dados["ts_dispositivo"], dados["ts"] = dados["ts"], agora
+        else:
+            relogios_ruins.discard(dados["maquina_id"])
+        fila.put(("leitura" if nome == "telemetria" else nome, dados))
 
     cliente.on_connect = ao_conectar  # dispara ao receber o CONNACK (e em reconexões)
     cliente.on_message = ao_receber
