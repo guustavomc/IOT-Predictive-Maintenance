@@ -15,7 +15,9 @@ import numpy as np
 
 INCREMENTO_DESGASTE = {"L": 2, "M": 3, "H": 5}            # min de desgaste por ciclo de processo
 LIMITE_SOBRECARGA = {"L": 11000, "M": 12000, "H": 13000}  # desgaste x torque que quebra a ferramenta
-TROCA_FERRAMENTA_ROTINA = 150                             # máquinas saudáveis trocam a ferramenta aqui
+# Máquinas saudáveis trocam a ferramenta por rotina bem antes da faixa de fim de
+# vida (200-240 min no AI4I), como faz o plano de manutenção de uma fábrica real.
+TROCA_FERRAMENTA_ROTINA = 100
 VIDA_UTIL_FERRAMENTA = 240                                # acima disso a ferramenta quebra
 
 

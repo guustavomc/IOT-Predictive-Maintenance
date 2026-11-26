@@ -36,3 +36,4 @@ JANELA_MEDIA = int(os.getenv("JANELA_MEDIA", "3"))  # média móvel do risco (ev
 
 # --- Painel ---------------------------------------------------------------
 FUSO = os.getenv("FUSO", "America/Sao_Paulo")
+SEM_SINAL_S = float(os.getenv("SEM_SINAL_S", "5"))  # sem telemetria há mais que isso = máquina "sem sinal"

@@ -1,12 +1,12 @@
-"""Mock dos dispositivos IoT (o "firmware" das máquinas simuladas).
+"""Mock de UM dispositivo IoT (o "firmware" de uma máquina simulada).
 
-Cada máquina simulada se comporta como um microcontrolador (ex.: ESP32) com
-sensores de temperatura, rotação, torque e desgaste. A comunicação com a
-plataforma segue SOMENTE o contrato em contrato/ (tópicos MQTT + JSON):
+Cada processo/container é uma máquina, como um microcontrolador (ex.: ESP32)
+instalado num equipamento, com sua própria identidade e sua própria conexão
+MQTT. A comunicação com a plataforma segue SOMENTE o contrato em contrato/:
 
   fabrica/maquinas/<id>/telemetria   publica a leitura dos sensores
   fabrica/maquinas/<id>/evento       publica falha real / manutenção realizada
-  fabrica/maquinas/<id>/comando      assina ordens vindas da plataforma
+  fabrica/maquinas/<id>/comando      assina as ordens enviadas para ESTA máquina
 
 Este projeto é independente da plataforma (não importa nada dela): poderia
 ser trocado por hardware real sem mudar uma linha do outro lado.
@@ -16,6 +16,7 @@ Configuração por variáveis de ambiente (ver README).
 import json
 import os
 import queue
+import re
 import time
 
 import numpy as np
@@ -23,100 +24,102 @@ import paho.mqtt.client as mqtt
 
 from maquina import MaquinaSimulada
 
+# --- Identidade do dispositivo ---------------------------------------------
+MAQUINA_ID = os.getenv("MAQUINA_ID", "M-01")
+TIPO_PRODUTO = os.getenv("TIPO_PRODUTO", "L")                           # L / M / H
+DEGRADANDO = os.getenv("DEGRADANDO", "false").lower() in ("1", "true", "sim", "yes")
+
+# --- Conexão --------------------------------------------------------------
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 TOPICO_BASE = "fabrica/maquinas"
 
-NUM_MAQUINAS = int(os.getenv("NUM_MAQUINAS", "5"))
-MAQUINA_DEGRADANDO = os.getenv("MAQUINA_DEGRADANDO", "M-03")
+# --- Comportamento da simulação -------------------------------------------
 INTERVALO_S = float(os.getenv("INTERVALO_S", "0.5"))          # tempo entre leituras
 ESCALA_DESGASTE = float(os.getenv("ESCALA_DESGASTE", "0.5"))  # acelera/desacelera o desgaste
-DERIVA_TORQUE = float(os.getenv("DERIVA_TORQUE", "0.15"))     # Nm a mais por leitura na máquina degradando
+DERIVA_TORQUE = float(os.getenv("DERIVA_TORQUE", "0.15"))     # Nm a mais por leitura quando degradando
 ATRASO_DEGRADACAO = int(os.getenv("ATRASO_DEGRADACAO", "30"))  # leituras normais antes de começar a degradar
 LEITURAS_PARADA = int(os.getenv("LEITURAS_PARADA", "20"))      # quanto tempo a máquina fica parada após falha
 
 
-def topico(maquina_id: str, tipo: str) -> str:
-    return f"{TOPICO_BASE}/{maquina_id}/{tipo}"
+def log(msg: str):
+    print(f"[{MAQUINA_ID}] {msg}", flush=True)
 
 
-def conectar(client_id: str) -> mqtt.Client:
+def topico(tipo: str) -> str:
+    return f"{TOPICO_BASE}/{MAQUINA_ID}/{tipo}"
+
+
+def validar_configuracao():
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", MAQUINA_ID):
+        raise SystemExit(f"MAQUINA_ID inválido: {MAQUINA_ID!r} (use letras, números, '-' ou '_')")
+    if TIPO_PRODUTO not in ("L", "M", "H"):
+        raise SystemExit(f"TIPO_PRODUTO inválido: {TIPO_PRODUTO!r} (use L, M ou H)")
+
+
+def conectar() -> mqtt.Client:
     """Conecta ao broker, tentando de novo até conseguir (como um dispositivo faria)."""
-    cliente = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
+    cliente = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"maquina-{MAQUINA_ID}")
     while True:
         try:
             cliente.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
-            print(f"[{client_id}] conectado ao broker {MQTT_HOST}:{MQTT_PORT}", flush=True)
+            log(f"conectado ao broker {MQTT_HOST}:{MQTT_PORT}")
             return cliente
         except OSError as erro:
-            print(f"[{client_id}] broker indisponível ({erro}); tentando de novo em 2 s...", flush=True)
+            log(f"broker indisponível ({erro}); tentando de novo em 2 s...")
             time.sleep(2)
 
 
-def criar_maquinas(rng) -> dict[str, MaquinaSimulada]:
-    tipos = ["M", "L", "H", "L", "M"]
-    maquinas = {}
-    for i in range(NUM_MAQUINAS):
-        mid = f"M-{i + 1:02d}"
-        degradando = mid == MAQUINA_DEGRADANDO
-        tipo = "L" if degradando else tipos[i % len(tipos)]
-        maquinas[mid] = MaquinaSimulada(mid, tipo, degradando, rng,
-                                        ESCALA_DESGASTE, DERIVA_TORQUE, ATRASO_DEGRADACAO)
-    return maquinas
-
-
 def main():
-    rng = np.random.default_rng()
-    maquinas = criar_maquinas(rng)
-    cliente = conectar("simulador-maquinas")
+    validar_configuracao()
+    maquina = MaquinaSimulada(MAQUINA_ID, TIPO_PRODUTO, DEGRADANDO, np.random.default_rng(),
+                              ESCALA_DESGASTE, DERIVA_TORQUE, ATRASO_DEGRADACAO)
+    cliente = conectar()
 
-    def publicar_evento(maquina_id, evento, detalhe):
-        payload = {"maquina_id": maquina_id, "ts": time.time(), "evento": evento, "detalhe": detalhe}
-        cliente.publish(topico(maquina_id, "evento"), json.dumps(payload), qos=1)
+    def publicar_evento(evento, detalhe):
+        payload = {"maquina_id": MAQUINA_ID, "ts": time.time(), "evento": evento, "detalhe": detalhe}
+        cliente.publish(topico("evento"), json.dumps(payload), qos=1)
 
     # O callback roda na thread de rede do MQTT: ele só enfileira o comando, e o
-    # laço principal o executa (uma única thread mexe nas máquinas e publica).
+    # laço principal o executa (uma única thread mexe na máquina e publica).
     comandos: queue.Queue = queue.Queue()
 
     def ao_receber_comando(_cliente, _userdata, msg):
         try:
-            comandos.put((msg.topic.split("/")[2], json.loads(msg.payload)))
+            comandos.put(json.loads(msg.payload))
         except ValueError:
-            print(f"Comando inválido ignorado em {msg.topic}", flush=True)
+            log("comando inválido ignorado")
 
     def ao_conectar(cli, _userdata, _flags, _reason_code, _properties):
-        cli.subscribe(f"{TOPICO_BASE}/+/comando", qos=1)
+        cli.subscribe(topico("comando"), qos=1)  # só as ordens desta máquina
 
     cliente.on_connect = ao_conectar
     cliente.on_message = ao_receber_comando
     cliente.loop_start()  # rede MQTT em thread separada
 
-    print(f"Simulando {len(maquinas)} máquinas; degradando: {MAQUINA_DEGRADANDO}", flush=True)
+    log(f"em operação (tipo {TIPO_PRODUTO}{', DEGRADANDO' if DEGRADANDO else ''})")
     while True:
         while not comandos.empty():
-            maquina_id, comando = comandos.get()
-            if comando.get("acao") == "manutencao" and maquina_id in maquinas:
-                maquinas[maquina_id].manutencao()
-                print(f"[{maquina_id}] manutenção preventiva realizada (comando da plataforma)", flush=True)
-                publicar_evento(maquina_id, "manutencao", "preventiva")
+            if comandos.get().get("acao") == "manutencao":
+                maquina.manutencao()
+                log("manutenção preventiva realizada (comando da plataforma)")
+                publicar_evento("manutencao", "preventiva")
 
-        for m in maquinas.values():
-            if m.parada_restante > 0:  # máquina quebrada, sem telemetria
-                m.parada_restante -= 1
-                if m.parada_restante == 0:
-                    m.manutencao()
-                    print(f"[{m.id}] manutenção corretiva concluída, máquina voltou a operar", flush=True)
-                    publicar_evento(m.id, "manutencao", "corretiva")
-                continue
+        if maquina.parada_restante > 0:  # máquina quebrada, sem telemetria
+            maquina.parada_restante -= 1
+            if maquina.parada_restante == 0:
+                maquina.manutencao()
+                log("manutenção corretiva concluída, máquina voltou a operar")
+                publicar_evento("manutencao", "corretiva")
+        else:
+            leitura = maquina.ler_sensores()
+            cliente.publish(topico("telemetria"), json.dumps(leitura))
 
-            leitura = m.ler_sensores()
-            cliente.publish(topico(m.id, "telemetria"), json.dumps(leitura))
-
-            modos = m.falhas_fisicas(leitura)
+            modos = maquina.falhas_fisicas(leitura)
             if modos:
-                print(f"[{m.id}] FALHA REAL: {modos}. Máquina parada.", flush=True)
-                publicar_evento(m.id, "falha", ",".join(modos))
-                m.parada_restante = LEITURAS_PARADA
+                log(f"FALHA REAL: {modos}. Máquina parada.")
+                publicar_evento("falha", ",".join(modos))
+                maquina.parada_restante = LEITURAS_PARADA
         time.sleep(INTERVALO_S)
 
 

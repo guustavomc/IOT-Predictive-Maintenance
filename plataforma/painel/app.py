@@ -71,7 +71,7 @@ def enviar_manutencao(maquina_id: str):
 def ao_vivo():
     leituras, alertas, eventos = carregar(janela_min)
     if leituras.empty:
-        st.info("Aguardando telemetria... (o simulador e o serviço de inferência estão rodando?)")
+        st.info("Aguardando telemetria... (as máquinas e o serviço de inferência estão rodando?)")
         return
 
     # --- Status por máquina ----------------------------------------------
@@ -81,11 +81,17 @@ def ao_vivo():
         if grupo.iloc[-1]["evento"] == "falha":
             paradas.add(mid)
 
+    agora = time.time()
     colunas = st.columns(len(ultimas))
     for col, (mid, ult) in zip(colunas, ultimas.iterrows()):
         p = ult["risco"]
+        silencio_s = agora - ult["ts"]
+        sem_sinal = mid not in paradas and silencio_s > config.SEM_SINAL_S
         if mid in paradas:
             status = "⛔ PARADA (falha)"
+        elif sem_sinal:
+            # parou de mandar telemetria sem registrar falha: dispositivo/rede fora do ar
+            status = f"⚪ Sem sinal há {silencio_s:.0f} s"
         elif p >= config.LIMIAR_ALERTA:
             status = "🔴 ALERTA"
         elif p >= NIVEL_ATENCAO:
@@ -95,7 +101,7 @@ def ao_vivo():
         with col:
             st.metric(f"{mid} (tipo {ult['tipo']})", f"{p:.0%}", help="Probabilidade de falha (média móvel)")
             st.caption(status)
-            if st.button("🔧 Manutenção", key=f"man_{mid}", disabled=mid in paradas):
+            if st.button("🔧 Manutenção", key=f"man_{mid}", disabled=mid in paradas or sem_sinal):
                 try:
                     enviar_manutencao(mid)
                     st.toast(f"Ordem de manutenção enviada para {mid}")

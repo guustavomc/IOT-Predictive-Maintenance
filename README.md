@@ -100,10 +100,20 @@ Exemplo de telemetria:
 
 ## 4. O dispositivo simulado (mock)
 
-Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](dispositivos/simulador/) faz o papel do hardware: cada máquina simulada se comporta como um microcontrolador (ex.: ESP32) com sensores, publicando o JSON acima no broker. Ele é um projeto à parte, com imagem Docker e dependências próprias (só `paho-mqtt` e `numpy`), e **não importa nada da plataforma**.
+Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](dispositivos/simulador/) faz o papel do hardware. Ele é um projeto à parte, com imagem Docker e dependências próprias (só `paho-mqtt` e `numpy`), e **não importa nada da plataforma**.
 
-- **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina antes de o desgaste ficar perigoso.
-- **Máquina degradando** (`M-03` por padrão): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
+**Um container por máquina.** Cada máquina roda no seu próprio container, como um microcontrolador (ex.: ESP32) instalado em cada equipamento. A imagem é a mesma (o "firmware"), mas cada uma tem identidade própria (`MAQUINA_ID`), sua própria conexão MQTT e assina só os comandos endereçados a ela. Assim, uma máquina pode cair sem afetar as outras:
+
+| Container | Máquina | Tipo de produto | Comportamento |
+|---|---|---|---|
+| `maquina-m01` | M-01 | M | saudável |
+| `maquina-m02` | M-02 | L | saudável |
+| `maquina-m03` | M-03 | L | **degrada até falhar** |
+| `maquina-m04` | M-04 | H | saudável |
+| `maquina-m05` | M-05 | M | saudável |
+
+- **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina aos 100 min de uso, bem antes da faixa de fim de vida (200–240 min).
+- **Máquina degradando** (`DEGRADANDO=true`, a M-03): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
 - Quando falha, a máquina **para** (não envia telemetria), publica o evento `falha` e, depois de um tempo, volta com manutenção corretiva. Se o painel mandar uma ordem de manutenção **antes**, ela é feita preventivamente e a falha é evitada.
 
 A física da máquina ([`maquina.py`](dispositivos/simulador/maquina.py)) segue o processo documentado do AI4I 2020, para que a telemetria simulada seja realista. Ela fica **só do lado do dispositivo**: a IA nunca vê essas regras. Ela aprende os padrões com os dados históricos e recebe apenas a telemetria, como numa fábrica de verdade.
@@ -128,6 +138,27 @@ A física da máquina ([`maquina.py`](dispositivos/simulador/maquina.py)) segue 
 1. `modelo_falha`: probabilidade de falha. Usa `class_weight="balanced_subsample"` porque as falhas são raras (~3,4% no AI4I), então a métrica que importa é **recall/F1 da classe falha**, não a acurácia.
 2. `modelo_tipo`: dado que há risco, qual o modo de falha mais provável (vira a "causa provável" do alerta).
 
+### Desempenho no dataset real (AI4I 2020, 20% de teste estratificado)
+
+| Métrica (classe falha) | Valor |
+|---|---|
+| Recall | 0,82 |
+| Precisão | 0,90 |
+| F1 | 0,86 |
+| ROC AUC | 0,972 |
+
+Os números completos ficam em [`modelos/metricas.json`](modelos/metricas.json). Separando o recall por modo de falha, aparece de onde vêm os erros:
+
+| Modo | Detectadas no teste | Observação |
+|---|---|---|
+| OSF (sobrecarga) | 16/16 | causa física: desgaste × torque |
+| PWF (potência) | 13/13 | causa física: torque × rotação |
+| HDF (calor) | 28/29 | causa física: Δtemperatura + rotação |
+| TWF (desgaste da ferramenta) | 1/10 | no AI4I, a ferramenta falha num ponto **aleatório** entre 200 e 240 min |
+| sem modo informado | 0/2 | ruído de rótulo do dataset original |
+
+**Insight:** o modelo acerta praticamente todas as falhas com causa física. Todos os erros vêm de falhas que, pela própria construção do dataset, são aleatórias, e nenhum modelo conseguiria prevê-las a partir dos sensores.
+
 ### Como a previsão acontece *antes* da falha
 
 Um classificador olhando só a leitura atual reconhece a falha quando ela **já está acontecendo**, e isso não é preditivo. Por isso o serviço de inferência trabalha com o fluxo como **série temporal**:
@@ -137,7 +168,7 @@ Um classificador olhando só a leitura atual reconhece a falha quando ela **já 
 3. a IA avalia o estado **atual** e o **projetado**. O risco é o maior dos dois, suavizado por média móvel;
 4. se o risco ≥ `LIMIAR_ALERTA` (0,5), sai o alerta, que fica aberto como uma ordem de serviço até a manutenção.
 
-Nos testes, **todas as falhas da máquina degradando foram alertadas com 34 a 54 leituras de antecedência** (≈17–27 s no ritmo padrão de 1 leitura a cada 0,5 s), **sem alarmes falsos** nas máquinas saudáveis.
+Nos testes com o modelo treinado no AI4I real (3 ciclos completos de degradação), **todas as falhas da máquina degradando foram alertadas com 22 a 51 leituras de antecedência** (≈11–25 s no ritmo padrão de 1 leitura a cada 0,5 s), **sem alarmes falsos**: nenhuma máquina saudável passou de 7,2% de risco.
 
 ### Processamento do fluxo em micro-lotes
 
@@ -152,11 +183,10 @@ Pré-requisito: [Docker Desktop](https://www.docker.com/products/docker-desktop/
 ```bash
 git clone https://github.com/guustavomc/IOT-Predictive-Maintenance.git
 cd IOT-Predictive-Maintenance
-# (opcional, mas recomendado) coloque o dataset real em data/ai4i2020.csv (ver seção 7)
 docker compose up --build
 ```
 
-Abra **http://localhost:8501**. O compose sobe, nesta ordem: broker → treino do modelo (roda uma vez e termina) → inferência → simulador → painel.
+Abra **http://localhost:8501**. O compose sobe, nesta ordem: broker → treino do modelo (roda uma vez e termina) → inferência → máquinas (um container cada) → painel.
 
 Para parar: `Ctrl+C` e `docker compose down` (use `docker compose down -v` para apagar também o histórico do banco).
 
@@ -185,8 +215,19 @@ Depois, cada um num terminal (sempre a partir da raiz do repositório):
 ```bash
 python -m plataforma.inferencia.servico        # terminal 1: plataforma
 streamlit run plataforma/painel/app.py         # terminal 2: plataforma -> http://localhost:8501
-python dispositivos/simulador/simulador.py     # terminal 3: chão de fábrica
 ```
+
+E as máquinas, uma por processo. No PowerShell, este comando abre uma janela para cada uma:
+
+```powershell
+$maquinas = @(@("M-01","M","false"), @("M-02","L","false"), @("M-03","L","true"), @("M-04","H","false"), @("M-05","M","false"))
+foreach ($m in $maquinas) {
+  $env:MAQUINA_ID = $m[0]; $env:TIPO_PRODUTO = $m[1]; $env:DEGRADANDO = $m[2]
+  Start-Process python -ArgumentList "dispositivos/simulador/simulador.py"
+}
+```
+
+(Linux/macOS: `MAQUINA_ID=M-03 TIPO_PRODUTO=L DEGRADANDO=true python dispositivos/simulador/simulador.py &`, e assim por diante.)
 
 ### Roteiro da demonstração (vídeo)
 
@@ -195,27 +236,30 @@ python dispositivos/simulador/simulador.py     # terminal 3: chão de fábrica
 3. O risco da IA sobe, a máquina vai para 🟡 atenção e depois 🔴 **ALERTA**, com a causa "Sobrecarga (desgaste x torque)".
 4. **Caminho A:** não fazer nada. A máquina falha (⛔ PARADA) e a tabela de validação mostra que **a IA avisou X segundos antes**.
 5. **Caminho B:** clicar em **🔧 Manutenção**. O comando vai via MQTT até a máquina, ela é reparada e a falha é **evitada** (contador "falhas evitadas").
+6. **Resiliência:** num terminal, `docker compose stop maquina-m02`. Só a M-02 vai para ⚪ **Sem sinal**, e as demais seguem normalmente. Com `docker compose start maquina-m02`, ela volta.
 
 ## 7. Dataset
 
-O treino procura `data/ai4i2020.csv`. Para baixar:
+O dataset real já vem no repositório: [`data/ai4i2020.csv`](data/ai4i2020.csv) (10.000 registros, 3,39% de falhas).
 
-1. Acesse https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset
-2. Baixe, extraia e salve o CSV como `data/ai4i2020.csv`
+> **Fonte e licença:** *AI4I 2020 Predictive Maintenance Dataset*, Stephan Matzka, UCI Machine Learning Repository, https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset. Licença [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), redistribuído aqui sem modificações.
 
-Se o arquivo não existir, o treino usa um **dataset sintético** que reproduz o processo de geração publicado do AI4I ([`plataforma/treino/dataset_sintetico.py`](plataforma/treino/dataset_sintetico.py)). Isso serve para o projeto rodar de imediato, mas **para o relatório usem o dataset real**.
+O dataset é usado **só para treinar a IA**. Ele faz o papel do histórico de manutenção da fábrica. As leituras ao vivo vêm das máquinas simuladas. Como cada linha do AI4I é uma amostra independente, e não uma série no tempo, reproduzir o CSV linha a linha não mostraria degradação gradual.
+
+Se o arquivo for removido, o treino usa um **dataset sintético** de reserva, que reproduz o processo de geração publicado do AI4I ([`plataforma/treino/dataset_sintetico.py`](plataforma/treino/dataset_sintetico.py)).
 
 ## 8. Configuração
 
 Tudo pode ser alterado por variável de ambiente.
 
-**Dispositivos** (lidas em [`dispositivos/simulador/simulador.py`](dispositivos/simulador/simulador.py)):
+**Dispositivos**, uma configuração por máquina (lidas em [`dispositivos/simulador/simulador.py`](dispositivos/simulador/simulador.py)). No Docker, ficam no bloco `maquina-mXX` do `docker-compose.yml`:
 
 | Variável | Padrão | Descrição |
 |---|---|---|
+| `MAQUINA_ID` | `M-01` | identidade da máquina (vira o `<id>` dos tópicos MQTT) |
+| `TIPO_PRODUTO` | `L` | classe do produto em processo: `L`, `M` ou `H` |
+| `DEGRADANDO` | `false` | se `true`, a máquina se degrada até falhar |
 | `MQTT_HOST` / `MQTT_PORT` | `localhost` / `1883` | broker |
-| `NUM_MAQUINAS` | `5` | máquinas simuladas |
-| `MAQUINA_DEGRADANDO` | `M-03` | qual máquina se degrada |
 | `INTERVALO_S` | `0.5` | segundos entre leituras (menor = demo mais rápida) |
 | `DERIVA_TORQUE` | `0.15` | velocidade da degradação (Nm por leitura) |
 | `ATRASO_DEGRADACAO` | `30` | leituras normais antes de começar a degradar |
@@ -228,6 +272,7 @@ Tudo pode ser alterado por variável de ambiente.
 | `LIMIAR_ALERTA` | `0.5` | risco que dispara o alerta |
 | `JANELA_TENDENCIA` | `60` | tamanho da janela deslizante |
 | `HORIZONTE_LEITURAS` | `50` | quantas leituras à frente a IA "olha" |
+| `SEM_SINAL_S` | `5` | segundos sem telemetria para o painel marcar a máquina como ⚪ sem sinal |
 
 **Docker Compose**: `MQTT_PORTA_HOST` (padrão `1883`) e `PAINEL_PORTA_HOST` (padrão `8501`).
 
@@ -241,7 +286,7 @@ Tudo pode ser alterado por variável de ambiente.
 │   └── *.schema.json              # telemetria, evento, comando, alerta
 ├── dispositivos/                  # CHÃO DE FÁBRICA (edge)
 │   └── simulador/                 # mock dos dispositivos: Dockerfile e requirements próprios
-│       ├── simulador.py           # "firmware": MQTT, telemetria, eventos, comandos
+│       ├── simulador.py           # "firmware" de UMA máquina (um container por máquina)
 │       └── maquina.py             # física da máquina (degradação e falhas reais)
 ├── plataforma/                    # PLATAFORMA (servidor/nuvem)
 │   ├── Dockerfile, requirements.txt

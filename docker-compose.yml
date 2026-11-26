@@ -6,6 +6,19 @@ x-plataforma: &plataforma
   environment:
     MQTT_HOST: mosquitto
 
+# Cada máquina é um dispositivo independente: mesma imagem ("firmware"),
+# identidade e conexão MQTT próprias. Para adicionar uma máquina, copie um
+# bloco maquina-mXX e troque MAQUINA_ID.
+x-maquina: &maquina
+  build: ./dispositivos/simulador
+  image: iot-pm-maquina
+  restart: unless-stopped
+  depends_on:
+    - mosquitto
+
+x-maquina-env: &maquina-env
+  MQTT_HOST: mosquitto
+
 services:
   # ======================= REDE / BROKER =======================
   # Broker MQTT: o "correio" entre o chão de fábrica e a plataforma.
@@ -21,13 +34,28 @@ services:
       - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
   # ================= CHÃO DE FÁBRICA (dispositivos/) =================
-  # Mock dos dispositivos IoT: imagem própria, sem nenhum código da plataforma.
-  simulador:
-    build: ./dispositivos/simulador
-    environment:
-      MQTT_HOST: mosquitto
-    depends_on:
-      - mosquitto
+  # Um container por máquina (mock dos dispositivos IoT, sem código da plataforma).
+  # Teste de resiliência: `docker compose stop maquina-m02` desliga só essa máquina.
+  maquina-m01:
+    <<: *maquina
+    environment: { <<: *maquina-env, MAQUINA_ID: M-01, TIPO_PRODUTO: M }
+
+  maquina-m02:
+    <<: *maquina
+    environment: { <<: *maquina-env, MAQUINA_ID: M-02, TIPO_PRODUTO: L }
+
+  # A máquina que se degrada até falhar (estrela da demonstração)
+  maquina-m03:
+    <<: *maquina
+    environment: { <<: *maquina-env, MAQUINA_ID: M-03, TIPO_PRODUTO: L, DEGRADANDO: "true" }
+
+  maquina-m04:
+    <<: *maquina
+    environment: { <<: *maquina-env, MAQUINA_ID: M-04, TIPO_PRODUTO: H }
+
+  maquina-m05:
+    <<: *maquina
+    environment: { <<: *maquina-env, MAQUINA_ID: M-05, TIPO_PRODUTO: M }
 
   # ======================= PLATAFORMA (plataforma/) =======================
   # Treina o modelo uma vez e termina (se já existir modelos/modelo.joblib, retreina)

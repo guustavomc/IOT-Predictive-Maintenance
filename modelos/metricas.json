@@ -1,55 +1,55 @@
 {
-  "fonte_dados": "sintético (regras AI4I)",
+  "fonte_dados": "AI4I 2020 (ai4i2020.csv)",
   "registros": 10000,
-  "taxa_falha": 0.0623,
+  "taxa_falha": 0.0339,
   "limiar": 0.5,
-  "roc_auc": 0.9936,
+  "roc_auc": 0.972,
   "matriz_confusao": [
     [
-      1867,
-      8
+      1926,
+      6
     ],
     [
-      7,
-      118
+      12,
+      56
     ]
   ],
   "relatorio": {
     "normal": {
-      "precision": 0.996264674493063,
-      "recall": 0.9957333333333334,
-      "f1-score": 0.995998933048813,
-      "support": 1875.0
+      "precision": 0.9938080495356038,
+      "recall": 0.9968944099378882,
+      "f1-score": 0.9953488372093023,
+      "support": 1932.0
     },
     "falha": {
-      "precision": 0.9365079365079365,
-      "recall": 0.944,
-      "f1-score": 0.9402390438247012,
-      "support": 125.0
+      "precision": 0.9032258064516129,
+      "recall": 0.8235294117647058,
+      "f1-score": 0.8615384615384616,
+      "support": 68.0
     },
-    "accuracy": 0.9925,
+    "accuracy": 0.991,
     "macro avg": {
-      "precision": 0.9663863055004998,
-      "recall": 0.9698666666666667,
-      "f1-score": 0.9681189884367571,
+      "precision": 0.9485169279936083,
+      "recall": 0.910211910851297,
+      "f1-score": 0.9284436493738819,
       "support": 2000.0
     },
     "weighted avg": {
-      "precision": 0.9925298783689926,
-      "recall": 0.9925,
-      "f1-score": 0.9925139399723062,
+      "precision": 0.9907282532707482,
+      "recall": 0.991,
+      "f1-score": 0.9907992844364938,
       "support": 2000.0
     }
   },
   "importancia_features": {
-    "desgaste_x_torque": 0.222,
-    "torque_nm": 0.1814,
-    "potencia_w": 0.1553,
-    "rotacao_rpm": 0.1282,
-    "desgaste_min": 0.1268,
-    "delta_temp_k": 0.1258,
-    "temp_processo_k": 0.0276,
-    "temp_ar_k": 0.0237,
-    "tipo_cod": 0.0093
+    "rotacao_rpm": 0.2121,
+    "torque_nm": 0.1886,
+    "potencia_w": 0.1846,
+    "desgaste_min": 0.1437,
+    "desgaste_x_torque": 0.1083,
+    "delta_temp_k": 0.0917,
+    "temp_ar_k": 0.0415,
+    "temp_processo_k": 0.0241,
+    "tipo_cod": 0.0055
   }
 }
