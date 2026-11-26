@@ -161,7 +161,9 @@ Os números completos ficam em [`modelos/metricas.json`](modelos/metricas.json).
 | TWF (desgaste da ferramenta) | 1/10 | no AI4I, a ferramenta falha num ponto **aleatório** entre 200 e 240 min |
 | sem modo informado | 0/2 | ruído de rótulo do dataset original |
 
-**Insight:** o modelo acerta praticamente todas as falhas com causa física. Todos os erros vêm de falhas que, pela própria construção do dataset, são aleatórias, e nenhum modelo conseguiria prevê-las a partir dos sensores.
+Uma mesma falha pode ter mais de um modo marcado, por isso a soma das linhas passa do total de 68 falhas do teste.
+
+**Insight:** o modelo acerta praticamente todas as falhas com causa física: considerando as que têm HDF, PWF ou OSF, o recall é de **56/57 (98%)**, e a única perdida foi uma HDF com probabilidade de 0,46, logo abaixo do limiar. Os outros 11 erros vêm de falhas que, pela própria construção do dataset, são aleatórias (9 de desgaste da ferramenta e 2 sem modo informado), e nenhum modelo conseguiria prevê-las a partir dos sensores.
 
 ### Como a previsão acontece *antes* da falha
 
