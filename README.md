@@ -112,7 +112,7 @@ Como não temos uma fábrica real, o projeto [`dispositivos/simulador/`](disposi
 | `maquina-m04` | M-04 | H | saudável |
 | `maquina-m05` | M-05 | M | saudável |
 
-- **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina antes de o desgaste ficar perigoso.
+- **Máquinas saudáveis**: torque estável (~40 Nm) e troca de ferramenta de rotina aos 100 min de uso, bem antes da faixa de fim de vida (200–240 min).
 - **Máquina degradando** (`DEGRADANDO=true`, a M-03): depois de um período normal, o **torque sobe progressivamente** e a ferramenta não é trocada, até a combinação desgaste × torque ultrapassar o limite e a máquina **falhar por sobrecarga** (OSF).
 - Quando falha, a máquina **para** (não envia telemetria), publica o evento `falha` e, depois de um tempo, volta com manutenção corretiva. Se o painel mandar uma ordem de manutenção **antes**, ela é feita preventivamente e a falha é evitada.
 
@@ -138,6 +138,27 @@ A física da máquina ([`maquina.py`](dispositivos/simulador/maquina.py)) segue 
 1. `modelo_falha`: probabilidade de falha. Usa `class_weight="balanced_subsample"` porque as falhas são raras (~3,4% no AI4I), então a métrica que importa é **recall/F1 da classe falha**, não a acurácia.
 2. `modelo_tipo`: dado que há risco, qual o modo de falha mais provável (vira a "causa provável" do alerta).
 
+### Desempenho no dataset real (AI4I 2020, 20% de teste estratificado)
+
+| Métrica (classe falha) | Valor |
+|---|---|
+| Recall | 0,82 |
+| Precisão | 0,90 |
+| F1 | 0,86 |
+| ROC AUC | 0,972 |
+
+Os números completos ficam em [`modelos/metricas.json`](modelos/metricas.json). Separando o recall por modo de falha, aparece de onde vêm os erros:
+
+| Modo | Detectadas no teste | Observação |
+|---|---|---|
+| OSF (sobrecarga) | 16/16 | causa física: desgaste × torque |
+| PWF (potência) | 13/13 | causa física: torque × rotação |
+| HDF (calor) | 28/29 | causa física: Δtemperatura + rotação |
+| TWF (desgaste da ferramenta) | 1/10 | no AI4I, a ferramenta falha num ponto **aleatório** entre 200 e 240 min |
+| sem modo informado | 0/2 | ruído de rótulo do dataset original |
+
+**Insight:** o modelo acerta praticamente todas as falhas com causa física. Todos os erros vêm de falhas que, pela própria construção do dataset, são aleatórias, e nenhum modelo conseguiria prevê-las a partir dos sensores.
+
 ### Como a previsão acontece *antes* da falha
 
 Um classificador olhando só a leitura atual reconhece a falha quando ela **já está acontecendo**, e isso não é preditivo. Por isso o serviço de inferência trabalha com o fluxo como **série temporal**:
@@ -147,7 +168,7 @@ Um classificador olhando só a leitura atual reconhece a falha quando ela **já 
 3. a IA avalia o estado **atual** e o **projetado**. O risco é o maior dos dois, suavizado por média móvel;
 4. se o risco ≥ `LIMIAR_ALERTA` (0,5), sai o alerta, que fica aberto como uma ordem de serviço até a manutenção.
 
-Nos testes, **todas as falhas da máquina degradando foram alertadas com 34 a 54 leituras de antecedência** (≈17–27 s no ritmo padrão de 1 leitura a cada 0,5 s), **sem alarmes falsos** nas máquinas saudáveis.
+Nos testes com o modelo treinado no AI4I real (3 ciclos completos de degradação), **todas as falhas da máquina degradando foram alertadas com 22 a 51 leituras de antecedência** (≈11–25 s no ritmo padrão de 1 leitura a cada 0,5 s), **sem alarmes falsos**: nenhuma máquina saudável passou de 7,2% de risco.
 
 ### Processamento do fluxo em micro-lotes
 
@@ -162,7 +183,6 @@ Pré-requisito: [Docker Desktop](https://www.docker.com/products/docker-desktop/
 ```bash
 git clone https://github.com/guustavomc/IOT-Predictive-Maintenance.git
 cd IOT-Predictive-Maintenance
-# (opcional, mas recomendado) coloque o dataset real em data/ai4i2020.csv (ver seção 7)
 docker compose up --build
 ```
 
@@ -220,12 +240,13 @@ foreach ($m in $maquinas) {
 
 ## 7. Dataset
 
-O treino procura `data/ai4i2020.csv`. Para baixar:
+O dataset real já vem no repositório: [`data/ai4i2020.csv`](data/ai4i2020.csv) (10.000 registros, 3,39% de falhas).
 
-1. Acesse https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset
-2. Baixe, extraia e salve o CSV como `data/ai4i2020.csv`
+> **Fonte e licença:** *AI4I 2020 Predictive Maintenance Dataset*, Stephan Matzka, UCI Machine Learning Repository, https://archive.ics.uci.edu/dataset/601/ai4i+2020+predictive+maintenance+dataset. Licença [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), redistribuído aqui sem modificações.
 
-Se o arquivo não existir, o treino usa um **dataset sintético** que reproduz o processo de geração publicado do AI4I ([`plataforma/treino/dataset_sintetico.py`](plataforma/treino/dataset_sintetico.py)). Isso serve para o projeto rodar de imediato, mas **para o relatório usem o dataset real**.
+O dataset é usado **só para treinar a IA**. Ele faz o papel do histórico de manutenção da fábrica. As leituras ao vivo vêm das máquinas simuladas. Como cada linha do AI4I é uma amostra independente, e não uma série no tempo, reproduzir o CSV linha a linha não mostraria degradação gradual.
+
+Se o arquivo for removido, o treino usa um **dataset sintético** de reserva, que reproduz o processo de geração publicado do AI4I ([`plataforma/treino/dataset_sintetico.py`](plataforma/treino/dataset_sintetico.py)).
 
 ## 8. Configuração
 
