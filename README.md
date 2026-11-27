@@ -4,6 +4,14 @@ Sistema que usa dados de sensores de máquinas industriais para **prever falhas 
 
 > Projeto final da disciplina **Internet das Coisas e Aplicações de IA e Big Data**, com a sinergia **IoT + Big Data + IA** aplicada à **Indústria 4.0**.
 
+**Integrantes:**
+
+- Ana Paula Castro Rodrigues
+- André Beck Kissmann
+- Gustavo Martins Conceição
+
+📄 **Relatório técnico:** [PDF](relatorio/Relatorio-Tecnico.pdf) · [DOCX](relatorio/Relatorio-Tecnico.docx)
+
 ---
 
 ## 1. O problema
